@@ -34,7 +34,14 @@ def preprocess_function(examples):
     second_sentences = sum(second_sentences, [])
 
     tokenized_examples = tokenizer(first_sentences, second_sentences, truncation=True)
-    return {k: [v[i : i + 4] for i in range(0, len(v), 4)] for k, v in tokenized_examples.items()}
+    tokenized_result = {}
+    for k, v in tokenized_examples.items():
+        # k is input_ids, token_type_ids, attention_mask
+        # so result.keys() = input_ids, token_type_ids, attention_mask
+        # v is a list of 4000 list inside of it
+        # v[0:4] takes the first 4 list inside of v -> [[], [], [], []]
+        tokenized_result[k] = [v[i : i + 4] for i in range(0, len(v), 4)] # key: [ [[], [], [], []], [[], [], [], []] ]
+    return tokenized_result
 
 # Data collator transforms dataset into a batch of tensors
 @dataclass
