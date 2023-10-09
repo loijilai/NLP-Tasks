@@ -79,10 +79,8 @@ def compute_metrics(eval_pred):
 # Loading and preprocessing dataset
 swag = load_dataset("swag", "regular")
 ending_names = ["ending0", "ending1", "ending2", "ending3"]
-tokenized_swag = swag.map(preprocess_function, batched=True)
-
-# Initializing a tokenizer
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+tokenized_swag = swag.map(preprocess_function, batched=True)
 
 # Evaluating model
 accuracy = evaluate.load("accuracy")
