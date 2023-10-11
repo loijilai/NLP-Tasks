@@ -1,6 +1,6 @@
 export DATASET_NAME=swag
 
-python run_swag_no_trainer.py \
+CUDA_VISIBLE_DEVICES=2 python run_swag_no_trainer.py \
   --model_name_or_path bert-base-cased \
   --dataset_name $DATASET_NAME \
   --max_seq_length 128 \

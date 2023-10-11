@@ -204,11 +204,11 @@ def parse_args():
         default=None,
         help="If the training should continue from a checkpoint folder.",
     )
-    parser.add_argument(
-        "--with_tracking",
-        action="store_true",
-        help="Whether to enable experiment trackers for logging.",
-    )
+    # parser.add_argument(
+    #     "--with_tracking",
+    #     action="store_true",
+    #     help="Whether to enable experiment trackers for logging.",
+    # )
     parser.add_argument(
         "--report_to",
         type=str,
@@ -287,20 +287,18 @@ class DataCollatorForMultipleChoice:
 def main():
     args = parse_args()
 
-    # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
-    # information sent is the one passed as arguments along with your Python/PyTorch versions.
-    send_example_telemetry("run_swag_no_trainer", args)
-
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
     # in the environment
-    accelerator_log_kwargs = {}
+    # accelerator_log_kwargs = {}
 
-    if args.with_tracking:
-        accelerator_log_kwargs["log_with"] = args.report_to
-        accelerator_log_kwargs["project_dir"] = args.output_dir
+    # if args.with_tracking:
+    #     accelerator_log_kwargs["log_with"] = args.report_to
+    #     accelerator_log_kwargs["project_dir"] = args.output_dir
 
-    accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps, **accelerator_log_kwargs)
+    accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps,
+                            #    **accelerator_log_kwargs
+                               )
 
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
@@ -312,7 +310,7 @@ def main():
     if accelerator.is_local_main_process:
         datasets.utils.logging.set_verbosity_warning()
         transformers.utils.logging.set_verbosity_info()
-    else:
+    else: # non-main process in a distributed setup, making it less verbose by setting a verbosity level of "error." 
         datasets.utils.logging.set_verbosity_error()
         transformers.utils.logging.set_verbosity_error()
 
@@ -418,7 +416,7 @@ def main():
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
-    embedding_size = model.get_input_embeddings().weight.shape[0]
+    embedding_size = model.get_input_embeddings().weight.shape[0] #TOUNDERSTAND
     if len(tokenizer) > embedding_size:
         model.resize_token_embeddings(len(tokenizer))
 
@@ -464,11 +462,11 @@ def main():
         logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
-    if args.pad_to_max_length:
+    if args.pad_to_max_length: # False
         # If padding was already done ot max length, we use the default data collator that will just convert everything
         # to tensors.
         data_collator = default_data_collator
-    else:
+    else: #TOUNDERSATND
         # Otherwise, `DataCollatorWithPadding` will apply dynamic padding for us (by padding to the maximum length of
         # the samples passed). When using mixed precision, we add `pad_to_multiple_of=8` to pad all tensors to multiple
         # of 8s, which will enable the use of Tensor Cores on NVIDIA hardware with compute capability >= 7.5 (Volta).
@@ -481,7 +479,7 @@ def main():
     )
     eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size)
 
-    # Optimizer
+    # Optimizer #TOUNDERSTAND
     # Split weights in two groups, one with weight decay and the other not.
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
