@@ -8,7 +8,7 @@
             "name": "run_swag_no_trainer.py",
             "type": "python",
             "request": "launch",
-            "program": "${file}",
+            "program": "/tmp2/loijilai/adl/paragraph-selection-QA/reference/run_swag_no_trainer.py",
             "console": "integratedTerminal",
             "env": {"CUDA_VISIBLE_DEVICES": "0"},
             "args": ["--model_name_or_path", "bert-base-cased",
@@ -17,7 +17,28 @@
                     "--per_device_train_batch_size", "32",
                     "--learning_rate", "2e-5",
                     "--num_train_epochs", "1",
-                    "--output_dir", "/tmp/swag/"]
+                    "--output_dir", "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc",
+                    "--debug" ]
+        },
+        {
+            "name": "mc_no_trainer.py",
+            "type": "python",
+            "request": "launch",
+            "program": "/tmp2/loijilai/adl/paragraph-selection-QA/mc_no_trainer.py",
+            "console": "integratedTerminal",
+            "env": {"CUDA_VISIBLE_DEVICES": "0"},
+            "args": ["--model_name_or_path", "bert-base-chinese",
+                    "--max_seq_length", "128",
+                    "--per_device_train_batch_size", "32",
+                    "--learning_rate", "2e-5",
+                    "--num_train_epochs", "1",
+                    "--output_dir", "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc",
+
+                    "--train_file", "/project/dsp/loijilai/adl/dataset1/train.json",
+                    "--validation_file", "/project/dsp/loijilai/adl/dataset1/valid.json",
+                    "--context_file", "/project/dsp/loijilai/adl/dataset1/context.json",
+                    "--debug"
+                    ]
         }
     ]
 }

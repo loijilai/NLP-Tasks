@@ -39,7 +39,7 @@ def preprocess_function(examples):
         # k is input_ids, token_type_ids, attention_mask
         # so result.keys() = input_ids, token_type_ids, attention_mask
         # v is a list of 4000 list inside of it
-        # v[0:4] takes the first 4 list inside of v -> [[], [], [], []]
+        # v[0:4] takes the first 4 list inside of v -> [[], [], [], []] Note that result of list slicing is also a list
         tokenized_result[k] = [v[i : i + 4] for i in range(0, len(v), 4)] # key: [ [[], [], [], []], [[], [], [], []] ]
     return tokenized_result
 
@@ -87,6 +87,10 @@ def compute_metrics(eval_pred):
 swag = load_dataset("swag", "regular")
 ending_names = ["ending0", "ending1", "ending2", "ending3"]
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+# single_example = swag["train"][0] This is an error
+# tk_single_example = preprocess_function(single_example) This is an error
+# batch_example = swag["train"][:5]
+# tk_batch_example = preprocess_function(batch_example)
 tokenized_swag = swag.map(preprocess_function, batched=True)
 
 # Evaluating model

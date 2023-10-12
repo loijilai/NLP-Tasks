@@ -65,7 +65,20 @@ MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
 def parse_args():
+    """
+    --model_name_or_path bert-base-chinese \
+    # --dataset_name swag \
+    --max_seq_length 128 \
+    --per_device_train_batch_size 32 \
+    --learning_rate 2e-5 \
+    --num_train_epochs 1 \
+    --output_dir /tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc \
+    --train_file /project/dsp/loijilai/adl/dataset1/train.json \
+    --validation_file /project/dsp/loijilai/adl/dataset1/valid.json \
+    + --context_file /project/dsp/loijilai/adl/dataset1/context.json
+    """
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a multiple choice task")
+    # Dataset
     parser.add_argument(
         "--dataset_name",
         type=str,
@@ -85,6 +98,10 @@ def parse_args():
         "--validation_file", type=str, default=None, help="A csv or a json file containing the validation data."
     )
     parser.add_argument(
+        "--context_file", type=str, default=None, help="A csv or a json file containing the context data."
+    )
+    # Padding & Sequence length
+    parser.add_argument(
         "--max_seq_length",
         type=int,
         default=128,
@@ -95,9 +112,10 @@ def parse_args():
     )
     parser.add_argument(
         "--pad_to_max_length",
-        action="store_true",
+        action="store_true", # This is a boolean flag
         help="If passed, pad all samples to `max_length`. Otherwise, dynamic padding is used.",
     )
+    # Model
     parser.add_argument(
         "--model_name_or_path",
         type=str,
@@ -110,6 +128,7 @@ def parse_args():
         default=None,
         help="Pretrained config name or path if not the same as model_name",
     )
+    # Tokenizer
     parser.add_argument(
         "--tokenizer_name",
         type=str,
@@ -121,6 +140,7 @@ def parse_args():
         action="store_true",
         help="If passed, will use a slow tokenizer (not backed by the 🤗 Tokenizers library).",
     )
+    # Training : batch_size
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
@@ -133,6 +153,7 @@ def parse_args():
         default=8,
         help="Batch size (per device) for the evaluation dataloader.",
     )
+    # Training: hyperparameters
     parser.add_argument(
         "--learning_rate",
         type=float,
@@ -163,6 +184,7 @@ def parse_args():
     parser.add_argument(
         "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
     )
+    # environment setting
     parser.add_argument("--output_dir", type=str, default=None, help="Where to store the final model.")
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument(
@@ -177,6 +199,7 @@ def parse_args():
         action="store_true",
         help="Activate debug mode and run training only with a subset of data.",
     )
+    # huggingface hub
     parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
     parser.add_argument(
         "--hub_model_id", type=str, help="The name of the repository to keep in sync with the local `output_dir`."
@@ -346,17 +369,16 @@ def main():
     #
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
-    if args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        raw_datasets = load_dataset(args.dataset_name, args.dataset_config_name)
-    else:
-        data_files = {}
-        if args.train_file is not None:
-            data_files["train"] = args.train_file
-        if args.validation_file is not None:
-            data_files["validation"] = args.validation_file
-        extension = args.train_file.split(".")[-1]
-        raw_datasets = load_dataset(extension, data_files=data_files)
+    data_files = {}
+    if args.train_file is not None:
+        data_files["train"] = args.train_file
+    if args.validation_file is not None:
+        data_files["validation"] = args.validation_file
+    extension = "json"
+    raw_datasets = load_dataset(extension, data_files=data_files)
+    with open(args.context_file, 'r') as f:
+        context_json = json.load(f)
+
     # Trim a number of training examples
     if args.debug:
         for split in raw_datasets.keys():
@@ -422,22 +444,31 @@ def main():
     # First we tokenize all the texts.
     padding = "max_length" if args.pad_to_max_length else False
 
-    def preprocess_function(examples):
-        first_sentences = [[context] * 4 for context in examples[context_name]]
-        question_headers = examples[question_header_name]
-        second_sentences = [
-            [f"{header} {examples[end][i]}" for end in ending_names] for i, header in enumerate(question_headers)
-        ]
-        labels = examples[label_column_name]
+    # TODO: move preprocess_function outside
+    def preprocess_function(batch_examples):
+        # Think batch_exmaples as raw_datasets['train'][:5]
+        paragraphs = []
+        # paras are four pargraphs index of an example: [p1, p2, p3, p4]
+        for paras in batch_examples['paragraphs']:
+            for p_index in paras:
+                paragraphs.append(context_json[p_index])
+            
+        questions = []
+        for question in batch_examples['question']:
+            questions.append([question]*4)
+
+        labels = []
+        for paras, ans in zip(batch_examples['paragraphs'], batch_examples['relevant']):
+            labels.append(paras.index(ans))
 
         # Flatten out
-        first_sentences = list(chain(*first_sentences))
-        second_sentences = list(chain(*second_sentences))
+        # paragraphs = list(chain(*paragraphs)) paragraphs does not need to be flatten
+        questions = list(chain(*questions))
 
         # Tokenize
         tokenized_examples = tokenizer(
-            first_sentences,
-            second_sentences,
+            paragraphs,
+            questions,
             max_length=args.max_seq_length,
             padding=padding, # padding = False here to use dynamic padding when batching
             truncation=True,
@@ -447,11 +478,14 @@ def main():
         tokenized_inputs["labels"] = labels
         return tokenized_inputs
 
+    ## DEBUG ##
+    # tmp = preprocess_function(raw_datasets['train'][:5])
+    ###########
     with accelerator.main_process_first():
-        processed_datasets = raw_datasets.map(
-            preprocess_function, batched=True, remove_columns=raw_datasets["train"].column_names
-        )
+        processed_datasets = raw_datasets.map(preprocess_function, batched=True)
 
+    #        datasetdict|dataset|
+    # processed_datasets['train'][0].keys() = dict_keys(['relevant', 'answer', 'question', 'id', 'paragraphs', 'input_ids', 'token_type_ids', 'attention_mask', 'labels'])
     train_dataset = processed_datasets["train"]
     eval_dataset = processed_datasets["validation"]
 
