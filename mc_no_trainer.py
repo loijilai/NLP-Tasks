@@ -218,7 +218,7 @@ def parse_args():
     parser.add_argument(
         "--checkpointing_steps",
         type=str,
-        default=None,
+        default="epoch",
         help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.",
     )
     parser.add_argument(
@@ -227,6 +227,7 @@ def parse_args():
         default=None,
         help="If the training should continue from a checkpoint folder.",
     )
+    # Tracking
     parser.add_argument(
         "--with_tracking",
         action="store_true",
@@ -282,11 +283,11 @@ class DataCollatorForMultipleChoice:
     max_length: Optional[int] = None
     pad_to_multiple_of: Optional[int] = None
 
-    def __call__(self, features):
+    def __call__(self, features:list): # features is a list of 32 dict (32 examples)
         label_name = "label" if "label" in features[0].keys() else "labels"
         labels = [feature.pop(label_name) for feature in features]
         batch_size = len(features)
-        num_choices = len(features[0]["input_ids"])
+        num_choices = len(features[0]["input_ids"]) # 4
         flattened_features = [
             [{k: v[i] for k, v in feature.items()} for i in range(num_choices)] for feature in features
         ]
@@ -482,7 +483,11 @@ def main():
     # tmp = preprocess_function(raw_datasets['train'][:5])
     ###########
     with accelerator.main_process_first():
-        processed_datasets = raw_datasets.map(preprocess_function, batched=True)
+        # remove columns to prevent dynamic batching error: line 291
+        # leave only input_ids, token_type_ids, attention_mask, labels
+        # error: 'int' object is not subscriptable
+        processed_datasets = raw_datasets.map(preprocess_function, batched=True, 
+                                              remove_columns=raw_datasets["train"].column_names)
 
     #        datasetdict|dataset|
     # processed_datasets['train'][0].keys() = dict_keys(['relevant', 'answer', 'question', 'id', 'paragraphs', 'input_ids', 'token_type_ids', 'attention_mask', 'labels'])
@@ -490,8 +495,8 @@ def main():
     eval_dataset = processed_datasets["validation"]
 
     # Log a few random samples from the training set:
-    for index in random.sample(range(len(train_dataset)), 3):
-        logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
+    # for index in random.sample(range(len(train_dataset)), 3):
+    #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
     if args.pad_to_max_length: # False
@@ -567,7 +572,7 @@ def main():
         experiment_config = vars(args)
         # TensorBoard cannot log Enums, need the raw value
         experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"].value
-        accelerator.init_trackers("swag_no_trainer", experiment_config)
+        accelerator.init_trackers("mc_no_trainer", experiment_config)
 
     # Metrics
     metric = evaluate.load("accuracy")
@@ -630,6 +635,7 @@ def main():
             active_dataloader = train_dataloader
         for step, batch in enumerate(active_dataloader):
             with accelerator.accumulate(model):
+                # input_ids/token_type_ids/attention_mask.size() = [32, 4, 128], labels.size() = [32]
                 outputs = model(**batch) # batch.keys = dict_keys(['input_ids', 'token_type_ids', 'attention_mask', 'labels'])
                 loss = outputs.loss #outputs.keys = dict_keys(['loss', 'logits'])
                 # We keep track of the loss at each epoch
