@@ -91,6 +91,19 @@ def save_prefixed_metrics(results, output_dir, file_name: str = "all_results.jso
 
 
 def parse_args():
+    ### Arguments ###
+    model_name_or_path = "bert-base-chinese"
+    doc_stride = 128
+    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa/tmp"
+    train_file = "/project/dsp/loijilai/adl/dataset1/train.json"
+    validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
+    context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
+    max_train_samples = None
+    max_eval_samples = None
+    max_predict_samples = None
+    checkpointing_steps = "epoch"
+    num_train_epochs = 1
+    #################
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a Question Answering task")
     parser.add_argument(
         "--dataset_name",
@@ -105,17 +118,20 @@ def parse_args():
         help="The configuration name of the dataset to use (via the datasets library).",
     )
     parser.add_argument(
-        "--train_file", type=str, default=None, help="A csv or a json file containing the training data."
+        "--train_file", type=str, default=train_file, help="A csv or a json file containing the training data."
     )
     parser.add_argument(
         "--preprocessing_num_workers", type=int, default=1, help="A csv or a json file containing the training data."
     )
     parser.add_argument("--do_predict", action="store_true", help="To do prediction on the question answering model")
     parser.add_argument(
-        "--validation_file", type=str, default=None, help="A csv or a json file containing the validation data."
+        "--validation_file", type=str, default=validation_file, help="A csv or a json file containing the validation data."
     )
     parser.add_argument(
         "--test_file", type=str, default=None, help="A csv or a json file containing the Prediction data."
+    )
+    parser.add_argument(
+        "--context_file", type=str, default=context_file, help="A csv or a json file containing the context data."
     )
     parser.add_argument(
         "--max_seq_length",
@@ -133,6 +149,7 @@ def parse_args():
     )
     parser.add_argument(
         "--model_name_or_path",
+        default=model_name_or_path,
         type=str,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
         required=False,
@@ -173,7 +190,7 @@ def parse_args():
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
-    parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
+    parser.add_argument("--num_train_epochs", type=int, default=num_train_epochs, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -196,12 +213,12 @@ def parse_args():
     parser.add_argument(
         "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
     )
-    parser.add_argument("--output_dir", type=str, default=None, help="Where to store the final model.")
+    parser.add_argument("--output_dir", type=str, default=output_dir, help="Where to store the final model.")
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument(
         "--doc_stride",
         type=int,
-        default=128,
+        default=doc_stride,
         help="When splitting up a long document into chunks how much stride to take between chunks.",
     )
     parser.add_argument(
@@ -237,7 +254,7 @@ def parse_args():
     parser.add_argument(
         "--max_train_samples",
         type=int,
-        default=None,
+        default=max_train_samples,
         help=(
             "For debugging purposes or quicker training, truncate the number of training examples to this "
             "value if set."
@@ -246,7 +263,7 @@ def parse_args():
     parser.add_argument(
         "--max_eval_samples",
         type=int,
-        default=None,
+        default=max_eval_samples,
         help=(
             "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
             "value if set."
@@ -258,7 +275,7 @@ def parse_args():
     parser.add_argument(
         "--max_predict_samples",
         type=int,
-        default=None,
+        default=max_predict_samples,
         help="For debugging purposes or quicker training, truncate the number of prediction examples to this",
     )
     parser.add_argument(
@@ -286,7 +303,7 @@ def parse_args():
     parser.add_argument(
         "--checkpointing_steps",
         type=str,
-        default=None,
+        default=checkpointing_steps,
         help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.",
     )
     parser.add_argument(
@@ -415,7 +432,14 @@ def main():
         if args.test_file is not None:
             data_files["test"] = args.test_file
         extension = args.train_file.split(".")[-1]
-        raw_datasets = load_dataset(extension, data_files=data_files, field="data")
+        raw_datasets = load_dataset(extension, data_files=data_files)
+        with open(args.context_file, 'r') as f:
+            context_json = json.load(f)
+
+        context_list = [context_json[i] for i in raw_datasets["train"]["relevant"]]
+        raw_datasets["train"] = raw_datasets["train"].add_column("context", context_list)
+        context_list = [context_json[i] for i in raw_datasets["validation"]["relevant"]]
+        raw_datasets["validation"] = raw_datasets["validation"].add_column("context", context_list)
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -462,9 +486,9 @@ def main():
 
     column_names = raw_datasets["train"].column_names
 
-    question_column_name = "question" if "question" in column_names else column_names[0]
-    context_column_name = "context" if "context" in column_names else column_names[1]
-    answer_column_name = "answers" if "answers" in column_names else column_names[2]
+    question_column_name = "question"
+    context_column_name = "context"
+    answer_column_name = "answer"
 
     # Padding side determines if we do (question|context) or (context|question).
     pad_on_right = tokenizer.padding_side == "right"
@@ -521,13 +545,13 @@ def main():
             sample_index = sample_mapping[i]
             answers = examples[answer_column_name][sample_index]
             # If no answers are given, set the cls_index as answer.
-            if len(answers["answer_start"]) == 0:
+            if answers["start"] == None:
                 tokenized_examples["start_positions"].append(cls_index)
                 tokenized_examples["end_positions"].append(cls_index)
             else:
                 # Start/end character index of the answer in the text.
-                start_char = answers["answer_start"][0]
-                end_char = start_char + len(answers["text"][0])
+                start_char = answers["start"]
+                end_char = start_char + len(answers["text"])
 
                 # Start token index of the current span in the text.
                 token_start_index = 0
@@ -575,6 +599,11 @@ def main():
         if args.max_train_samples is not None:
             # Number of samples might increase during Feature Creation, We select only specified max samples
             train_dataset = train_dataset.select(range(args.max_train_samples))
+
+    # Dataset({
+    # features: ['input_ids', 'token_type_ids', 'attention_mask', 'start_positions', 'end_positions'],
+    # num_rows: 100
+    # })
 
     # Validation preprocessing
     def prepare_validation_features(examples):
@@ -643,6 +672,11 @@ def main():
     if args.max_eval_samples is not None:
         # During Feature creation dataset samples might increase, we will select required samples again
         eval_dataset = eval_dataset.select(range(args.max_eval_samples))
+    
+    # Dataset({
+    # features: ['input_ids', 'token_type_ids', 'attention_mask', 'offset_mapping', 'example_id'],
+    # num_rows: 100
+    # })
 
     if args.do_predict:
         if "test" not in raw_datasets:
@@ -666,8 +700,8 @@ def main():
                 predict_dataset = predict_dataset.select(range(args.max_predict_samples))
 
     # Log a few random samples from the training set:
-    for index in random.sample(range(len(train_dataset)), 3):
-        logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
+    # for index in random.sample(range(len(train_dataset)), 3):
+    #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
     if args.pad_to_max_length:
@@ -695,7 +729,7 @@ def main():
             predict_dataset_for_model, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size
         )
 
-    # Post-processing:
+    # Post-processing:         # eval_examples, eval_dataset, outputs_numpy
     def post_processing_function(examples, features, predictions, stage="eval"):
         # Post-processing: we match the start logits and end logits to answers in the original context.
         predictions = postprocess_qa_predictions(
@@ -710,15 +744,16 @@ def main():
             prefix=stage,
         )
         # Format the result to the format the metric expects.
-        if args.version_2_with_negative:
-            formatted_predictions = [
-                {"id": k, "prediction_text": v, "no_answer_probability": 0.0} for k, v in predictions.items()
-            ]
-        else:
-            formatted_predictions = [{"id": k, "prediction_text": v} for k, v in predictions.items()]
+        # if args.version_2_with_negative:
+        #     formatted_predictions = [
+        #         {"id": k, "prediction_text": v, "no_answer_probability": 0.0} for k, v in predictions.items()
+        #     ]
+        # else:
+        #     formatted_predictions = [{"id": k, "prediction_text": v} for k, v in predictions.items()]
 
-        references = [{"id": ex["id"], "answers": ex[answer_column_name]} for ex in examples]
-        return EvalPrediction(predictions=formatted_predictions, label_ids=references)
+        # references = [{"id": ex["id"], "answers": ex[answer_column_name]} for ex in examples]
+        # return EvalPrediction(predictions=formatted_predictions, label_ids=references)
+        return predictions
 
     metric = evaluate.load("squad_v2" if args.version_2_with_negative else "squad")
 
@@ -857,10 +892,14 @@ def main():
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
 
+    # Record loss and EM
+    train_loss_list = []
+    train_em_list = []
+    eval_loss_list = []
+    eval_em_list = []
     for epoch in range(starting_epoch, args.num_train_epochs):
         model.train()
-        if args.with_tracking:
-            total_loss = 0
+        total_loss = 0
         if args.resume_from_checkpoint and epoch == starting_epoch and resume_step is not None:
             # We skip the first `n` batches in the dataloader when resuming from a checkpoint
             active_dataloader = accelerator.skip_first_batches(train_dataloader, resume_step)
@@ -869,12 +908,11 @@ def main():
         for step, batch in enumerate(active_dataloader):
             with accelerator.accumulate(model):
                 outputs = model(**batch)
-                loss = outputs.loss
+                train_loss = outputs.loss
                 # We keep track of the loss at each epoch
-                if args.with_tracking:
-                    total_loss += loss.detach().float()
+                total_loss += train_loss.detach().cpu().float()
 
-                accelerator.backward(loss)
+                accelerator.backward(train_loss)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -894,6 +932,69 @@ def main():
             if completed_steps >= args.max_train_steps:
                 break
 
+            # Record loss and EM for report
+            step_threshold_for_report = 5
+            if (step+1) % step_threshold_for_report == 0:
+                train_loss_list.append(total_loss/step)
+
+                # Evaluation
+                logger.info("***** Running Evaluation *****")
+                logger.info(f"  Current epoch = {epoch + 1}")
+                logger.info(f"  Current step = [{step + 1}/{len(train_dataloader)}]")
+                logger.info(f"  Num examples = {len(eval_dataset)}")
+                logger.info(f"  Batch size = {args.per_device_eval_batch_size}")
+
+                all_start_logits = []
+                all_end_logits = []
+
+                model.eval()
+
+                for step, batch in enumerate(eval_dataloader):
+                    with torch.no_grad():
+                        outputs = model(**batch)
+                        start_logits = outputs.start_logits
+                        end_logits = outputs.end_logits
+                        # eval_loss = outputs.loss
+
+                        if not args.pad_to_max_length:  # necessary to pad predictions and labels for being gathered
+                            start_logits = accelerator.pad_across_processes(start_logits, dim=1, pad_index=-100)
+                            end_logits = accelerator.pad_across_processes(end_logits, dim=1, pad_index=-100)
+
+                        all_start_logits.append(accelerator.gather_for_metrics(start_logits).cpu().numpy())
+                        all_end_logits.append(accelerator.gather_for_metrics(end_logits).cpu().numpy())
+
+                max_len = max([x.shape[1] for x in all_start_logits])  # Get the max_length of the tensor
+
+                # concatenate the numpy array
+                start_logits_concat = create_and_fill_np_array(all_start_logits, eval_dataset, max_len) # (100, 384)
+                end_logits_concat = create_and_fill_np_array(all_end_logits, eval_dataset, max_len)
+
+                # delete the list of numpy arrays
+                del all_start_logits # (13 batches, batch size = 8 , 384)
+                del all_end_logits
+
+                outputs_numpy = (start_logits_concat, end_logits_concat)
+                prediction = post_processing_function(eval_examples, eval_dataset, outputs_numpy)
+
+                # Calculate the exact match metric
+                em = 0
+                for id, pred_ans in prediction.items():
+                    # convert sample_id to sample_index
+                    sample_index = eval_examples["id"].index(id)
+                    if(pred_ans == eval_examples[sample_index]['answer']['text']):
+                        em += 1
+                eval_em = em / len(eval_dataset)
+                eval_em_list.append(eval_em)
+                print("--------------------------------")
+                print(f"Training Loss: {total_loss/step}")
+                print(f"Validation EM rate: {eval_em}")
+                print("--------------------------------")
+                # eval_loss_list.append(eval_loss.detach().float())
+
+                # eval_metric = metric.compute(predictions=prediction.predictions, references=prediction.label_ids)
+                # logger.info(f"Evaluation metrics: {eval_metric}")
+
+        # Per epoch operation
         if args.checkpointing_steps == "epoch":
             output_dir = f"epoch_{epoch}"
             if args.output_dir is not None:
@@ -911,44 +1012,17 @@ def main():
                 repo.push_to_hub(
                     commit_message=f"Training in progress epoch {epoch}", blocking=False, auto_lfs_prune=True
                 )
+    # End training
+    print("Training finished!")
+    print(f"Train loss: {train_loss_list}")
+    print(f"Train EM: {train_em_list}")
+    print(f"Eval loss: {eval_loss_list}")
+    print(f"Eval EM: {eval_em_list}")
+    with open(os.path.join(args.output_dir, "train_loss_list.json"), "w") as f:
+        json.dump({"train_loss": train_loss_list}, f)
+    with open(os.path.join(args.output_dir, "eval_em_list.json"), "w") as f:
+        json.dump({"EM": eval_em_list}, f)
 
-    # Evaluation
-    logger.info("***** Running Evaluation *****")
-    logger.info(f"  Num examples = {len(eval_dataset)}")
-    logger.info(f"  Batch size = {args.per_device_eval_batch_size}")
-
-    all_start_logits = []
-    all_end_logits = []
-
-    model.eval()
-
-    for step, batch in enumerate(eval_dataloader):
-        with torch.no_grad():
-            outputs = model(**batch)
-            start_logits = outputs.start_logits
-            end_logits = outputs.end_logits
-
-            if not args.pad_to_max_length:  # necessary to pad predictions and labels for being gathered
-                start_logits = accelerator.pad_across_processes(start_logits, dim=1, pad_index=-100)
-                end_logits = accelerator.pad_across_processes(end_logits, dim=1, pad_index=-100)
-
-            all_start_logits.append(accelerator.gather_for_metrics(start_logits).cpu().numpy())
-            all_end_logits.append(accelerator.gather_for_metrics(end_logits).cpu().numpy())
-
-    max_len = max([x.shape[1] for x in all_start_logits])  # Get the max_length of the tensor
-
-    # concatenate the numpy array
-    start_logits_concat = create_and_fill_np_array(all_start_logits, eval_dataset, max_len)
-    end_logits_concat = create_and_fill_np_array(all_end_logits, eval_dataset, max_len)
-
-    # delete the list of numpy arrays
-    del all_start_logits
-    del all_end_logits
-
-    outputs_numpy = (start_logits_concat, end_logits_concat)
-    prediction = post_processing_function(eval_examples, eval_dataset, outputs_numpy)
-    eval_metric = metric.compute(predictions=prediction.predictions, references=prediction.label_ids)
-    logger.info(f"Evaluation metrics: {eval_metric}")
 
     # Prediction
     if args.do_predict:
@@ -985,20 +1059,20 @@ def main():
 
         outputs_numpy = (start_logits_concat, end_logits_concat)
         prediction = post_processing_function(predict_examples, predict_dataset, outputs_numpy)
-        predict_metric = metric.compute(predictions=prediction.predictions, references=prediction.label_ids)
-        logger.info(f"Predict metrics: {predict_metric}")
+        # predict_metric = metric.compute(predictions=prediction.predictions, references=prediction.label_ids)
+        # logger.info(f"Predict metrics: {predict_metric}")
 
-    if args.with_tracking:
-        log = {
-            "squad_v2" if args.version_2_with_negative else "squad": eval_metric,
-            "train_loss": total_loss.item() / len(train_dataloader),
-            "epoch": epoch,
-            "step": completed_steps,
-        }
-    if args.do_predict:
-        log["squad_v2_predict" if args.version_2_with_negative else "squad_predict"] = predict_metric
+    # if args.with_tracking:
+    #     log = {
+    #         "squad_v2" if args.version_2_with_negative else "squad": eval_metric,
+    #         "train_loss": total_loss.item() / len(train_dataloader),
+    #         "epoch": epoch,
+    #         "step": completed_steps,
+    #     }
+    # if args.do_predict:
+    #     log["squad_v2_predict" if args.version_2_with_negative else "squad_predict"] = predict_metric
 
-        accelerator.log(log, step=completed_steps)
+    #     accelerator.log(log, step=completed_steps)
 
     if args.output_dir is not None:
         accelerator.wait_for_everyone()
@@ -1011,8 +1085,8 @@ def main():
             if args.push_to_hub:
                 repo.push_to_hub(commit_message="End of training", auto_lfs_prune=True)
 
-            logger.info(json.dumps(eval_metric, indent=4))
-            save_prefixed_metrics(eval_metric, args.output_dir)
+            # logger.info(json.dumps(eval_metric, indent=4))
+            # save_prefixed_metrics(eval_metric, args.output_dir)
 
 
 if __name__ == "__main__":

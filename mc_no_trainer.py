@@ -392,11 +392,6 @@ def main():
     else:
         column_names = raw_datasets["validation"].column_names
 
-    # When using your own dataset or a different dataset from swag, you will probably need to change this.
-    ending_names = [f"ending{i}" for i in range(4)]
-    context_name = "sent1"
-    question_header_name = "sent2"
-    label_column_name = "label" if "label" in column_names else "labels"
 
     # Load pretrained model and tokenizer
     #
