@@ -92,9 +92,10 @@ def save_prefixed_metrics(results, output_dir, file_name: str = "all_results.jso
 
 def parse_args():
     ### Arguments ###
+    # CUDA_VISIBLE_DEVICES=1
     model_name_or_path = "bert-base-chinese"
     doc_stride = 128
-    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa/tmp"
+    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa"
     train_file = "/project/dsp/loijilai/adl/dataset1/train.json"
     validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
@@ -102,7 +103,11 @@ def parse_args():
     max_eval_samples = None
     max_predict_samples = None
     checkpointing_steps = "epoch"
-    num_train_epochs = 1
+    num_train_epochs = 2
+    learning_rate = 3e-5
+    max_seq_length = 512
+    per_device_train_batch_size = 1
+    gradient_accumulation_steps = 2
     #################
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a Question Answering task")
     parser.add_argument(
@@ -136,7 +141,7 @@ def parse_args():
     parser.add_argument(
         "--max_seq_length",
         type=int,
-        default=384,
+        default=max_seq_length,
         help=(
             "The maximum total input sequence length after tokenization. Sequences longer than this will be truncated,"
             " sequences shorter will be padded if `--pad_to_max_lengh` is passed."
@@ -174,7 +179,7 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=8,
+        default=per_device_train_batch_size,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
@@ -186,7 +191,7 @@ def parse_args():
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=5e-5,
+        default=learning_rate,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
@@ -200,7 +205,7 @@ def parse_args():
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=1,
+        default=gradient_accumulation_steps,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument(
@@ -848,12 +853,13 @@ def main():
     total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(train_dataset)}")
+    logger.info(f"  Num examples after tokenized = {len(train_dataset)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
     logger.info(f"  Instantaneous batch size per device = {args.per_device_train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
+        # args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
@@ -898,19 +904,20 @@ def main():
     eval_loss_list = []
     eval_em_list = []
     for epoch in range(starting_epoch, args.num_train_epochs):
-        model.train()
-        total_loss = 0
         if args.resume_from_checkpoint and epoch == starting_epoch and resume_step is not None:
             # We skip the first `n` batches in the dataloader when resuming from a checkpoint
             active_dataloader = accelerator.skip_first_batches(train_dataloader, resume_step)
         else:
             active_dataloader = train_dataloader
+
+        total_loss = 0
         for step, batch in enumerate(active_dataloader):
+            model.train()
             with accelerator.accumulate(model):
                 outputs = model(**batch)
                 train_loss = outputs.loss
                 # We keep track of the loss at each epoch
-                total_loss += train_loss.detach().cpu().float()
+                total_loss += train_loss.detach().cpu().item()
 
                 accelerator.backward(train_loss)
                 optimizer.step()
@@ -933,15 +940,16 @@ def main():
                 break
 
             # Record loss and EM for report
-            step_threshold_for_report = 5
-            if (step+1) % step_threshold_for_report == 0:
-                train_loss_list.append(total_loss/step)
+            step_for_report = 6000
+            if (step+1) % step_for_report == 0:
+                # Record loss...
+                avg_step_loss = total_loss / step # Note that divides by step not completed_steps
+                train_loss_list.append(avg_step_loss) 
 
-                # Evaluation
+                # Evaluation for recording EM...
                 logger.info("***** Running Evaluation *****")
+                logger.info(f"  Num examples after tokenized = {len(eval_dataset)}")
                 logger.info(f"  Current epoch = {epoch + 1}")
-                logger.info(f"  Current step = [{step + 1}/{len(train_dataloader)}]")
-                logger.info(f"  Num examples = {len(eval_dataset)}")
                 logger.info(f"  Batch size = {args.per_device_eval_batch_size}")
 
                 all_start_logits = []
@@ -983,11 +991,11 @@ def main():
                     sample_index = eval_examples["id"].index(id)
                     if(pred_ans == eval_examples[sample_index]['answer']['text']):
                         em += 1
-                eval_em = em / len(eval_dataset)
+                eval_em = em / len(prediction)
                 eval_em_list.append(eval_em)
                 print("--------------------------------")
-                print(f"Training Loss: {total_loss/step}")
-                print(f"Validation EM rate: {eval_em}")
+                print(f"Training Loss: {train_loss_list[-1]}")
+                print(f"Validation EM rate: {eval_em_list[-1]}")
                 print("--------------------------------")
                 # eval_loss_list.append(eval_loss.detach().float())
 
