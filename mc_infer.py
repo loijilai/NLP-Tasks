@@ -138,7 +138,7 @@ def main():
     test_dataloader = DataLoader(test_dataset, collate_fn=default_data_collator, batch_size=args.test_batch_size)
 
     # Inference
-    relevant = []
+    labels = []
     model.eval()
     for batch in tqdm(test_dataloader, desc="Inferencing"):
         # move batch to device
@@ -147,10 +147,10 @@ def main():
         with torch.no_grad(): # batch.size() = (batch_size, 4, max_seq_length)
             outputs = model(**batch)
         predictions = outputs.logits.argmax(dim=-1) # predictions is a tensor of size (batch_size) with predicted labels in it
-        relevant.extend(predictions.tolist())
+        labels.extend(predictions.tolist())
 
     # Writing output_data to json file
-    raw_datasets["test"] = raw_datasets["test"].add_column("relevant", relevant)
+    raw_datasets["test"] = raw_datasets["test"].add_column("labels", labels)
     output_data = []
     for dic in raw_datasets["test"]:
         output_data.append(dic)

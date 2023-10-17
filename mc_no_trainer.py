@@ -65,16 +65,17 @@ MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 def parse_args():
     ### Arguments ###
     # CUDA_VISIBLE_DEVICES=2
-    model_name_or_path = "bert-base-chinese"
+    model_name_or_path = "hfl/chinese-macbert-base"
     train_file = "/project/dsp/loijilai/adl/dataset1/train.json"
     validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
-    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc"
+    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc/03-chinese-macbert-base"
     max_seq_length = 512
     per_device_train_batch_size = 1
     learning_rate = 3e-5
-    num_train_epochs = 2
+    num_train_epochs = 1
     with_tracking = True
+    debug = False
     #################
 
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a multiple choice task")
@@ -198,6 +199,7 @@ def parse_args():
     parser.add_argument(
         "--debug",
         action="store_true",
+        default=debug,
         help="Activate debug mode and run training only with a subset of data.",
     )
     # huggingface hub

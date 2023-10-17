@@ -1,10 +1,10 @@
 CUDA_VISIBLE_DEVICES=2 python mc_no_trainer.py \
-  --model_name_or_path bert-base-chinese \
+  --model_name_or_path hfl/chinese-roberta-wwm-ext-large \
   --max_seq_length 512 \
   --per_device_train_batch_size 1 \
   --learning_rate 3e-5 \
-  --num_train_epochs 1 \
-  --output_dir /tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc \
+  --num_train_epochs 2 \
+  --output_dir /tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc/roberta \
   --gradient_accumulation_steps 1 \
   --train_file /project/dsp/loijilai/adl/dataset1/train.json \
   --validation_file /project/dsp/loijilai/adl/dataset1/valid.json \

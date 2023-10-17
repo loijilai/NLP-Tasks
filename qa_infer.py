@@ -18,7 +18,7 @@ from transformers import (
 def parse_args():
     ### Arguments ###
     # CUDA_VISIBLE_DEVICES=1
-    model_name_or_path = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa"
+    model_name_or_path = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa/02-bert-base-chinese"
     test_file = "/tmp2/loijilai/adl/paragraph-selection-QA/dataset/mc_result.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
     output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/dataset"
@@ -104,8 +104,8 @@ def main():
         context_json = json.load(f)
 
     context_list = []
-    for relevant, paras in zip(raw_datasets["test"]["relevant"], raw_datasets["test"]["paragraphs"]):
-        relevant_paragraph = context_json[paras[relevant]]
+    for label, paras in zip(raw_datasets["test"]["labels"], raw_datasets["test"]["paragraphs"]):
+        relevant_paragraph = context_json[paras[label]]
         context_list.append(relevant_paragraph)
 
     raw_datasets["test"] = raw_datasets["test"].add_column("context", context_list)

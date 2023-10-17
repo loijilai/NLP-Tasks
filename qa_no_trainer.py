@@ -93,16 +93,16 @@ def save_prefixed_metrics(results, output_dir, file_name: str = "all_results.jso
 def parse_args():
     ### Arguments ###
     # CUDA_VISIBLE_DEVICES=1
-    model_name_or_path = "bert-base-chinese"
+    model_name_or_path = "hfl/chinese-macbert-base"
     train_file = "/project/dsp/loijilai/adl/dataset1/train.json"
     validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
-    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa/again"
-    doc_stride = 128
+    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa/03-chinese-macbert-base"
     max_train_samples = None
     max_eval_samples = None
     max_predict_samples = None
     checkpointing_steps = "epoch"
+    doc_stride = 128
     num_train_epochs = 3
     learning_rate = 3e-5
     max_seq_length = 512
@@ -422,16 +422,9 @@ def main():
             context_json = json.load(f)
 
         # Add context key to raw_datasets to make prepare_train_features work
-        context_list = []
-        for relevant, paras in zip(raw_datasets["train"]["relevant"], raw_datasets["train"]["paragraphs"]):
-            relevant_paragraph = context_json[paras[relevant]]
-            context_list.append(relevant_paragraph)
+        context_list = [context_json[i] for i in raw_datasets["train"]["relevant"]]
         raw_datasets["train"] = raw_datasets["train"].add_column("context", context_list)
-
-        context_list = []
-        for relevant, paras in zip(raw_datasets["validation"]["relevant"], raw_datasets["validation"]["paragraphs"]):
-            relevant_paragraph = context_json[paras[relevant]]
-            context_list.append(relevant_paragraph)
+        context_list = [context_json[i] for i in raw_datasets["validation"]["relevant"]]
         raw_datasets["validation"] = raw_datasets["validation"].add_column("context", context_list)
 
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
@@ -886,7 +879,7 @@ def main():
             if completed_steps >= args.max_train_steps:
                 break
 
-            # Record loss and EM for report
+            # Record loss and EM for report every 8000 steps
             step_for_report = 8000
             if (step+1) % step_for_report == 0:
                 # Record loss...
@@ -969,8 +962,9 @@ def main():
         unwrapped_model = accelerator.unwrap_model(model)
         unwrapped_model.save_pretrained(
             args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
-        )
+        ) # save config.json and pytorch_model.bin
         if accelerator.is_main_process:
+            # save tokenizer.json, special_tokens_map.json, vocab.txt, tokenizer_config.json
             tokenizer.save_pretrained(args.output_dir)
 
 
