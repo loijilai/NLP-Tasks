@@ -94,19 +94,20 @@ def parse_args():
     ### Arguments ###
     # CUDA_VISIBLE_DEVICES=1
     model_name_or_path = "bert-base-chinese"
-    doc_stride = 128
-    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa"
     train_file = "/project/dsp/loijilai/adl/dataset1/train.json"
     validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
+    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa/again"
+    doc_stride = 128
     max_train_samples = None
     max_eval_samples = None
     max_predict_samples = None
     checkpointing_steps = "epoch"
-    num_train_epochs = 2
+    num_train_epochs = 3
     learning_rate = 3e-5
     max_seq_length = 512
     per_device_train_batch_size = 1
+    per_device_eval_batch_size = 4
     gradient_accumulation_steps = 2
     #################
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a Question Answering task")
@@ -185,7 +186,7 @@ def parse_args():
     parser.add_argument(
         "--per_device_eval_batch_size",
         type=int,
-        default=8,
+        default=per_device_eval_batch_size,
         help="Batch size (per device) for the evaluation dataloader.",
     )
     parser.add_argument(
@@ -395,27 +396,6 @@ def main():
     if args.seed is not None:
         set_seed(args.seed)
 
-    # Handle the repository creation
-    if accelerator.is_main_process:
-        if args.push_to_hub:
-            # Retrieve of infer repo_name
-            repo_name = args.hub_model_id
-            if repo_name is None:
-                repo_name = Path(args.output_dir).absolute().name
-            # Create repo and retrieve repo_id
-            repo_id = create_repo(repo_name, exist_ok=True, token=args.hub_token).repo_id
-            # Clone repo locally
-            repo = Repository(args.output_dir, clone_from=repo_id, token=args.hub_token)
-
-            with open(os.path.join(args.output_dir, ".gitignore"), "w+") as gitignore:
-                if "step_*" not in gitignore:
-                    gitignore.write("step_*\n")
-                if "epoch_*" not in gitignore:
-                    gitignore.write("epoch_*\n")
-        elif args.output_dir is not None:
-            os.makedirs(args.output_dir, exist_ok=True)
-    accelerator.wait_for_everyone()
-
     # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
     # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
     # (the dataset will be downloaded automatically from the datasets Hub).
@@ -441,10 +421,19 @@ def main():
         with open(args.context_file, 'r') as f:
             context_json = json.load(f)
 
-        context_list = [context_json[i] for i in raw_datasets["train"]["relevant"]]
+        # Add context key to raw_datasets to make prepare_train_features work
+        context_list = []
+        for relevant, paras in zip(raw_datasets["train"]["relevant"], raw_datasets["train"]["paragraphs"]):
+            relevant_paragraph = context_json[paras[relevant]]
+            context_list.append(relevant_paragraph)
         raw_datasets["train"] = raw_datasets["train"].add_column("context", context_list)
-        context_list = [context_json[i] for i in raw_datasets["validation"]["relevant"]]
+
+        context_list = []
+        for relevant, paras in zip(raw_datasets["validation"]["relevant"], raw_datasets["validation"]["paragraphs"]):
+            relevant_paragraph = context_json[paras[relevant]]
+            context_list.append(relevant_paragraph)
         raw_datasets["validation"] = raw_datasets["validation"].add_column("context", context_list)
+
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -683,30 +672,6 @@ def main():
     # num_rows: 100
     # })
 
-    if args.do_predict:
-        if "test" not in raw_datasets:
-            raise ValueError("--do_predict requires a test dataset")
-        predict_examples = raw_datasets["test"]
-        if args.max_predict_samples is not None:
-            # We will select sample from whole data
-            predict_examples = predict_examples.select(range(args.max_predict_samples))
-        # Predict Feature Creation
-        with accelerator.main_process_first():
-            predict_dataset = predict_examples.map(
-                prepare_validation_features,
-                batched=True,
-                num_proc=args.preprocessing_num_workers,
-                remove_columns=column_names,
-                load_from_cache_file=not args.overwrite_cache,
-                desc="Running tokenizer on prediction dataset",
-            )
-            if args.max_predict_samples is not None:
-                # During Feature creation dataset samples might increase, we will select required samples again
-                predict_dataset = predict_dataset.select(range(args.max_predict_samples))
-
-    # Log a few random samples from the training set:
-    # for index in random.sample(range(len(train_dataset)), 3):
-    #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
     if args.pad_to_max_length:
@@ -728,12 +693,6 @@ def main():
         eval_dataset_for_model, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size
     )
 
-    if args.do_predict:
-        predict_dataset_for_model = predict_dataset.remove_columns(["example_id", "offset_mapping"])
-        predict_dataloader = DataLoader(
-            predict_dataset_for_model, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size
-        )
-
     # Post-processing:         # eval_examples, eval_dataset, outputs_numpy
     def post_processing_function(examples, features, predictions, stage="eval"):
         # Post-processing: we match the start logits and end logits to answers in the original context.
@@ -748,19 +707,7 @@ def main():
             output_dir=args.output_dir,
             prefix=stage,
         )
-        # Format the result to the format the metric expects.
-        # if args.version_2_with_negative:
-        #     formatted_predictions = [
-        #         {"id": k, "prediction_text": v, "no_answer_probability": 0.0} for k, v in predictions.items()
-        #     ]
-        # else:
-        #     formatted_predictions = [{"id": k, "prediction_text": v} for k, v in predictions.items()]
-
-        # references = [{"id": ex["id"], "answers": ex[answer_column_name]} for ex in examples]
-        # return EvalPrediction(predictions=formatted_predictions, label_ids=references)
         return predictions
-
-    metric = evaluate.load("squad_v2" if args.version_2_with_negative else "squad")
 
     # Create and fill numpy array of size len_of_validation_data * max_length_of_output_tensor
     def create_and_fill_np_array(start_or_end_logits, dataset, max_len):
@@ -940,7 +887,7 @@ def main():
                 break
 
             # Record loss and EM for report
-            step_for_report = 6000
+            step_for_report = 8000
             if (step+1) % step_for_report == 0:
                 # Record loss...
                 avg_step_loss = total_loss / step # Note that divides by step not completed_steps
@@ -997,10 +944,6 @@ def main():
                 print(f"Training Loss: {train_loss_list[-1]}")
                 print(f"Validation EM rate: {eval_em_list[-1]}")
                 print("--------------------------------")
-                # eval_loss_list.append(eval_loss.detach().float())
-
-                # eval_metric = metric.compute(predictions=prediction.predictions, references=prediction.label_ids)
-                # logger.info(f"Evaluation metrics: {eval_metric}")
 
         # Per epoch operation
         if args.checkpointing_steps == "epoch":
@@ -1009,17 +952,6 @@ def main():
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
 
-        if args.push_to_hub and epoch < args.num_train_epochs - 1:
-            accelerator.wait_for_everyone()
-            unwrapped_model = accelerator.unwrap_model(model)
-            unwrapped_model.save_pretrained(
-                args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
-            )
-            if accelerator.is_main_process:
-                tokenizer.save_pretrained(args.output_dir)
-                repo.push_to_hub(
-                    commit_message=f"Training in progress epoch {epoch}", blocking=False, auto_lfs_prune=True
-                )
     # End training
     print("Training finished!")
     print(f"Train loss: {train_loss_list}")
@@ -1031,57 +963,7 @@ def main():
     with open(os.path.join(args.output_dir, "eval_em_list.json"), "w") as f:
         json.dump({"EM": eval_em_list}, f)
 
-
-    # Prediction
-    if args.do_predict:
-        logger.info("***** Running Prediction *****")
-        logger.info(f"  Num examples = {len(predict_dataset)}")
-        logger.info(f"  Batch size = {args.per_device_eval_batch_size}")
-
-        all_start_logits = []
-        all_end_logits = []
-
-        model.eval()
-
-        for step, batch in enumerate(predict_dataloader):
-            with torch.no_grad():
-                outputs = model(**batch)
-                start_logits = outputs.start_logits
-                end_logits = outputs.end_logits
-
-                if not args.pad_to_max_length:  # necessary to pad predictions and labels for being gathered
-                    start_logits = accelerator.pad_across_processes(start_logits, dim=1, pad_index=-100)
-                    end_logits = accelerator.pad_across_processes(end_logits, dim=1, pad_index=-100)
-
-                all_start_logits.append(accelerator.gather_for_metrics(start_logits).cpu().numpy())
-                all_end_logits.append(accelerator.gather_for_metrics(end_logits).cpu().numpy())
-
-        max_len = max([x.shape[1] for x in all_start_logits])  # Get the max_length of the tensor
-        # concatenate the numpy array
-        start_logits_concat = create_and_fill_np_array(all_start_logits, predict_dataset, max_len)
-        end_logits_concat = create_and_fill_np_array(all_end_logits, predict_dataset, max_len)
-
-        # delete the list of numpy arrays
-        del all_start_logits
-        del all_end_logits
-
-        outputs_numpy = (start_logits_concat, end_logits_concat)
-        prediction = post_processing_function(predict_examples, predict_dataset, outputs_numpy)
-        # predict_metric = metric.compute(predictions=prediction.predictions, references=prediction.label_ids)
-        # logger.info(f"Predict metrics: {predict_metric}")
-
-    # if args.with_tracking:
-    #     log = {
-    #         "squad_v2" if args.version_2_with_negative else "squad": eval_metric,
-    #         "train_loss": total_loss.item() / len(train_dataloader),
-    #         "epoch": epoch,
-    #         "step": completed_steps,
-    #     }
-    # if args.do_predict:
-    #     log["squad_v2_predict" if args.version_2_with_negative else "squad_predict"] = predict_metric
-
-    #     accelerator.log(log, step=completed_steps)
-
+    # Store the model and tokenizer to use for inference
     if args.output_dir is not None:
         accelerator.wait_for_everyone()
         unwrapped_model = accelerator.unwrap_model(model)
@@ -1090,11 +972,6 @@ def main():
         )
         if accelerator.is_main_process:
             tokenizer.save_pretrained(args.output_dir)
-            if args.push_to_hub:
-                repo.push_to_hub(commit_message="End of training", auto_lfs_prune=True)
-
-            # logger.info(json.dumps(eval_metric, indent=4))
-            # save_prefixed_metrics(eval_metric, args.output_dir)
 
 
 if __name__ == "__main__":

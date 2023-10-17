@@ -23,7 +23,6 @@ import json
 import logging
 import math
 import os
-import random
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
@@ -54,7 +53,6 @@ from transformers import (
 )
 from transformers.utils import PaddingStrategy, check_min_version, send_example_telemetry
 
-
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 # check_min_version("4.35.0.dev0")
 
@@ -65,18 +63,20 @@ MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
 def parse_args():
-    """
-    --model_name_or_path bert-base-chinese \
-    # --dataset_name swag \
-    --max_seq_length 128 \
-    --per_device_train_batch_size 32 \
-    --learning_rate 2e-5 \
-    --num_train_epochs 1 \
-    --output_dir /tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc \
-    --train_file /project/dsp/loijilai/adl/dataset1/train.json \
-    --validation_file /project/dsp/loijilai/adl/dataset1/valid.json \
-    + --context_file /project/dsp/loijilai/adl/dataset1/context.json
-    """
+    ### Arguments ###
+    # CUDA_VISIBLE_DEVICES=2
+    model_name_or_path = "bert-base-chinese"
+    train_file = "/project/dsp/loijilai/adl/dataset1/train.json"
+    validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
+    context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
+    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc"
+    max_seq_length = 512
+    per_device_train_batch_size = 1
+    learning_rate = 3e-5
+    num_train_epochs = 2
+    with_tracking = True
+    #################
+
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a multiple choice task")
     # Dataset
     parser.add_argument(
@@ -92,19 +92,19 @@ def parse_args():
         help="The configuration name of the dataset to use (via the datasets library).",
     )
     parser.add_argument(
-        "--train_file", type=str, default=None, help="A csv or a json file containing the training data."
+        "--train_file", type=str, default=train_file, help="A csv or a json file containing the training data."
     )
     parser.add_argument(
-        "--validation_file", type=str, default=None, help="A csv or a json file containing the validation data."
+        "--validation_file", type=str, default=validation_file, help="A csv or a json file containing the validation data."
     )
     parser.add_argument(
-        "--context_file", type=str, default=None, help="A csv or a json file containing the context data."
+        "--context_file", type=str, default=context_file, help="A csv or a json file containing the context data."
     )
     # Padding & Sequence length
     parser.add_argument(
         "--max_seq_length",
         type=int,
-        default=128,
+        default=max_seq_length,
         help=(
             "The maximum total input sequence length after tokenization. Sequences longer than this will be truncated,"
             " sequences shorter will be padded if `--pad_to_max_lengh` is passed."
@@ -119,6 +119,7 @@ def parse_args():
     parser.add_argument(
         "--model_name_or_path",
         type=str,
+        default=model_name_or_path,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
         required=False,
     )
@@ -144,7 +145,7 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=8,
+        default=per_device_train_batch_size,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
@@ -157,11 +158,11 @@ def parse_args():
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=5e-5,
+        default=learning_rate,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
-    parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
+    parser.add_argument("--num_train_epochs", type=int, default=num_train_epochs, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -185,7 +186,7 @@ def parse_args():
         "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
     )
     # environment setting
-    parser.add_argument("--output_dir", type=str, default=None, help="Where to store the final model.")
+    parser.add_argument("--output_dir", type=str, default=output_dir, help="Where to store the final model.")
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument(
         "--model_type",
@@ -231,6 +232,7 @@ def parse_args():
     parser.add_argument(
         "--with_tracking",
         action="store_true",
+        default=with_tracking,
         help="Whether to enable experiment trackers for logging.",
     )
     parser.add_argument(
@@ -340,27 +342,6 @@ def main():
     if args.seed is not None:
         set_seed(args.seed)
 
-    # Handle the repository creation
-    if accelerator.is_main_process:
-        if args.push_to_hub:
-            # Retrieve of infer repo_name
-            repo_name = args.hub_model_id
-            if repo_name is None:
-                repo_name = Path(args.output_dir).absolute().name
-            # Create repo and retrieve repo_id
-            repo_id = create_repo(repo_name, exist_ok=True, token=args.hub_token).repo_id
-            # Clone repo locally
-            repo = Repository(args.output_dir, clone_from=repo_id, token=args.hub_token)
-
-            with open(os.path.join(args.output_dir, ".gitignore"), "w+") as gitignore:
-                if "step_*" not in gitignore:
-                    gitignore.write("step_*\n")
-                if "epoch_*" not in gitignore:
-                    gitignore.write("epoch_*\n")
-        elif args.output_dir is not None:
-            os.makedirs(args.output_dir, exist_ok=True)
-    accelerator.wait_for_everyone()
-
     # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
     # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
     # (the dataset will be downloaded automatically from the datasets Hub).
@@ -386,11 +367,6 @@ def main():
             raw_datasets[split] = raw_datasets[split].select(range(100))
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
-
-    if raw_datasets["train"] is not None:
-        column_names = raw_datasets["train"].column_names
-    else:
-        column_names = raw_datasets["validation"].column_names
 
 
     # Load pretrained model and tokenizer
@@ -440,7 +416,6 @@ def main():
     # First we tokenize all the texts.
     padding = "max_length" if args.pad_to_max_length else False
 
-    # TODO: move preprocess_function outside
     def preprocess_function(batch_examples):
         # Think batch_exmaples as raw_datasets['train'][:5]
         paragraphs = []
@@ -483,15 +458,11 @@ def main():
         # error: 'int' object is not subscriptable
         processed_datasets = raw_datasets.map(preprocess_function, batched=True, 
                                               remove_columns=raw_datasets["train"].column_names)
-
-    #        datasetdict|dataset|
-    # processed_datasets['train'][0].keys() = dict_keys(['relevant', 'answer', 'question', 'id', 'paragraphs', 'input_ids', 'token_type_ids', 'attention_mask', 'labels'])
+    # remove columns : 'relevant', 'answer', 'question', 'id', 'paragraphs'
+    # processed_datasets is datasetdict and processed_datasets['train'] is dataset
+    # processed_datasets['train'][0].keys() = dict_keys(['input_ids', 'token_type_ids', 'attention_mask', 'labels'])
     train_dataset = processed_datasets["train"]
     eval_dataset = processed_datasets["validation"]
-
-    # Log a few random samples from the training set:
-    # for index in random.sample(range(len(train_dataset)), 3):
-    #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
     if args.pad_to_max_length: # False
@@ -681,17 +652,6 @@ def main():
                 step=completed_steps,
             )
 
-        if args.push_to_hub and epoch < args.num_train_epochs - 1:
-            accelerator.wait_for_everyone()
-            unwrapped_model = accelerator.unwrap_model(model)
-            unwrapped_model.save_pretrained(
-                args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
-            )
-            if accelerator.is_main_process:
-                tokenizer.save_pretrained(args.output_dir)
-                repo.push_to_hub(
-                    commit_message=f"Training in progress epoch {epoch}", blocking=False, auto_lfs_prune=True
-                )
 
         if args.checkpointing_steps == "epoch":
             output_dir = f"epoch_{epoch}"
@@ -710,9 +670,6 @@ def main():
         )
         if accelerator.is_main_process:
             tokenizer.save_pretrained(args.output_dir)
-            if args.push_to_hub:
-                repo.push_to_hub(commit_message="End of training", auto_lfs_prune=True)
-
             all_results = {f"eval_{k}": v for k, v in eval_metric.items()}
             with open(os.path.join(args.output_dir, "all_results.json"), "w") as f:
                 json.dump(all_results, f)

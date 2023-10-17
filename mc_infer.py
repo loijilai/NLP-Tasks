@@ -15,13 +15,16 @@ from transformers import (
 )
 
 def parse_args():
+    ### Arguments ###
+    # CUDA_VISIBLE_DEVICES=2
+    model_name_or_path = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc"
     test_file = "/project/dsp/loijilai/adl/dataset1/test.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
-    max_seq_length = 512
-    model_name_or_path = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc"
+    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/dataset/"
+    max_seq_length = 512 # for tokenizer to do static padding
     test_batch_size = 8
-    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/dataset/mc_result.json"
     debug = False
+    #################
 
     parser = argparse.ArgumentParser(description="Inference using a transformers model on a multiple choice task")
     # Dataset
@@ -49,14 +52,14 @@ def parse_args():
         help="Path to pretrained model or model identifier from huggingface.co/models.",
         required=False,
     )
-    # Training : batch_size
+    # Inference: batch_size
     parser.add_argument(
         "--test_batch_size",
         type=int,
         default=test_batch_size,
         help="Batch size (per device) for the test dataloader.",
     )
-    # environment setting
+    # Environment setting
     parser.add_argument("--output_dir", type=str, default=output_dir, help="Where to store the final model.")
     parser.add_argument(
         "--debug",
@@ -146,13 +149,13 @@ def main():
         predictions = outputs.logits.argmax(dim=-1) # predictions is a tensor of size (batch_size) with predicted labels in it
         relevant.extend(predictions.tolist())
 
-    # write output_data to json file
+    # Writing output_data to json file
     raw_datasets["test"] = raw_datasets["test"].add_column("relevant", relevant)
     output_data = []
     for dic in raw_datasets["test"]:
         output_data.append(dic)
     print("Saving output_data to {}...".format(args.output_dir))
-    with open(args.output_dir, 'w') as f:
+    with open(args.output_dir + '/' + 'mc_result.json', 'w') as f:
         json.dump(output_data, f, ensure_ascii=False, indent=4)
     print("Done!")
 
