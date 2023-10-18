@@ -25,7 +25,6 @@ import math
 import os
 from dataclasses import dataclass
 from itertools import chain
-from pathlib import Path
 from typing import Optional, Union
 
 import datasets
@@ -35,7 +34,6 @@ from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
 from datasets import load_dataset
-from huggingface_hub import Repository, create_repo
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -65,15 +63,16 @@ MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 def parse_args():
     ### Arguments ###
     # CUDA_VISIBLE_DEVICES=2
-    model_name_or_path = "hfl/chinese-macbert-base"
+    model_name_or_path = "hfl/chinese-macbert-base" # change this
     train_file = "/project/dsp/loijilai/adl/dataset1/train.json"
     validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
-    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc/03-chinese-macbert-base"
+    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc" # do not change
     max_seq_length = 512
     per_device_train_batch_size = 1
+    gradient_accumulation_steps = 2
     learning_rate = 3e-5
-    num_train_epochs = 1
+    num_train_epochs = 5
     with_tracking = True
     debug = False
     #################
@@ -173,7 +172,7 @@ def parse_args():
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=1,
+        default=gradient_accumulation_steps,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument(
@@ -314,6 +313,18 @@ class DataCollatorForMultipleChoice:
 
 def main():
     args = parse_args()
+    # Handling output directory
+    model_name = args.model_name_or_path.split("/")[-1]
+    # find the lastest directory in the output_dir
+    latest = 0
+    for dir_name in os.listdir(args.output_dir):
+        num = int(dir_name.split("-")[0])
+        if num > latest:
+            latest = num
+    args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}-{model_name}")
+    print("output_dir is set to " + args.output_dir)
+    os.mkdir(args.output_dir)
+
 
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers

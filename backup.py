@@ -23,18 +23,14 @@ import json
 import logging
 import math
 import os
-import random
-from pathlib import Path
 
 import datasets
-import evaluate
 import numpy as np
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
-from datasets import load_dataset
-from huggingface_hub import Repository, create_repo
+from datasets import load_dataset, concatenate_datasets
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from utils_qa import postprocess_qa_predictions
@@ -47,7 +43,6 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoTokenizer,
     DataCollatorWithPadding,
-    EvalPrediction,
     SchedulerType,
     default_data_collator,
     get_scheduler,
@@ -93,17 +88,17 @@ def save_prefixed_metrics(results, output_dir, file_name: str = "all_results.jso
 def parse_args():
     ### Arguments ###
     # CUDA_VISIBLE_DEVICES=1
-    model_name_or_path = "hfl/chinese-roberta-wwm-ext" # change this
+    model_name_or_path = "hfl/chinese-macbert-base" # change this
     train_file = "/project/dsp/loijilai/adl/dataset1/train.json"
     validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
     output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa" # do not change
-    max_train_samples = None
-    max_eval_samples = None
+    max_train_samples = 50 #
+    max_eval_samples = 50
     max_predict_samples = None
     checkpointing_steps = "epoch"
     doc_stride = 128
-    num_train_epochs = 6
+    num_train_epochs = 10
     learning_rate = 3e-5
     max_seq_length = 512
     per_device_train_batch_size = 4
@@ -374,11 +369,6 @@ def main():
     print("output_dir is set to " + args.output_dir)
     os.mkdir(args.output_dir)
 
-
-    # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
-    # information sent is the one passed as arguments along with your Python/PyTorch versions.
-    # send_example_telemetry("run_qa_no_trainer", args)
-
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
     # in the environment
@@ -580,7 +570,11 @@ def main():
 
     if "train" not in raw_datasets:
         raise ValueError("--do_train requires a train dataset")
-    train_dataset = raw_datasets["train"]
+    
+    # I use validation dataset as train dataset
+    assert raw_datasets["train"].features.type == raw_datasets["validation"].features.type
+    train_dataset = concatenate_datasets([raw_datasets["train"], raw_datasets["validation"]])
+
     if args.max_train_samples is not None:
         # We will select sample from whole data if agument is specified
         train_dataset = train_dataset.select(range(args.max_train_samples))
@@ -805,7 +799,7 @@ def main():
     total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples after tokenized = {len(train_dataset)}")
+    logger.info(f"  Num examples of train_dataset after tokenized = {len(train_dataset)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
     logger.info(f"  Instantaneous batch size per device = {args.per_device_train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
@@ -850,7 +844,7 @@ def main():
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
 
-    # Record loss and EM
+    # Record loss and EM for report
     train_loss_list = []
     train_em_list = []
     eval_loss_list = []
@@ -891,66 +885,62 @@ def main():
             if completed_steps >= args.max_train_steps:
                 break
 
-            # Record loss and EM for report every 8000 steps
-            step_for_report = 8000
-            if (step+1) % step_for_report == 0:
-                # Record loss...
-                avg_step_loss = total_loss / step # Note that divides by step not completed_steps
-                train_loss_list.append(avg_step_loss) 
-
-                # Evaluation for recording EM...
-                logger.info("***** Running Evaluation *****")
-                logger.info(f"  Num examples after tokenized = {len(eval_dataset)}")
-                logger.info(f"  Current epoch = {epoch + 1}")
-                logger.info(f"  Batch size = {args.per_device_eval_batch_size}")
-
-                all_start_logits = []
-                all_end_logits = []
-
-                model.eval()
-
-                for step, batch in enumerate(eval_dataloader):
-                    with torch.no_grad():
-                        outputs = model(**batch)
-                        start_logits = outputs.start_logits
-                        end_logits = outputs.end_logits
-                        # eval_loss = outputs.loss
-
-                        if not args.pad_to_max_length:  # necessary to pad predictions and labels for being gathered
-                            start_logits = accelerator.pad_across_processes(start_logits, dim=1, pad_index=-100)
-                            end_logits = accelerator.pad_across_processes(end_logits, dim=1, pad_index=-100)
-
-                        all_start_logits.append(accelerator.gather_for_metrics(start_logits).cpu().numpy())
-                        all_end_logits.append(accelerator.gather_for_metrics(end_logits).cpu().numpy())
-
-                max_len = max([x.shape[1] for x in all_start_logits])  # Get the max_length of the tensor
-
-                # concatenate the numpy array
-                start_logits_concat = create_and_fill_np_array(all_start_logits, eval_dataset, max_len) # (100, 384)
-                end_logits_concat = create_and_fill_np_array(all_end_logits, eval_dataset, max_len)
-
-                # delete the list of numpy arrays
-                del all_start_logits # (13 batches, batch size = 8 , 384)
-                del all_end_logits
-
-                outputs_numpy = (start_logits_concat, end_logits_concat)
-                prediction = post_processing_function(eval_examples, eval_dataset, outputs_numpy)
-
-                # Calculate the exact match metric
-                em = 0
-                for id, pred_ans in prediction.items():
-                    # convert sample_id to sample_index
-                    sample_index = eval_examples["id"].index(id)
-                    if(pred_ans == eval_examples[sample_index]['answer']['text']):
-                        em += 1
-                eval_em = em / len(prediction)
-                eval_em_list.append(eval_em)
-                print("--------------------------------")
-                print(f"Training Loss: {train_loss_list[-1]}")
-                print(f"Validation EM rate: {eval_em_list[-1]}")
-                print("--------------------------------")
-
         # Per epoch operation
+        logger.info("***** Metric recording *****")
+        logger.info(f"  Current epoch = {epoch + 1}")
+        logger.info(f"  Batch size = {args.per_device_eval_batch_size}")
+
+        # Record loss...
+        avg_batch_loss = total_loss / len(active_dataloader)
+        train_loss_list.append(avg_batch_loss) 
+
+        # Record EM...
+        all_start_logits = []
+        all_end_logits = []
+
+        model.eval()
+
+        for step, batch in enumerate(eval_dataloader):
+            with torch.no_grad():
+                outputs = model(**batch)
+                start_logits = outputs.start_logits
+                end_logits = outputs.end_logits
+                # eval_loss = outputs.loss
+
+                if not args.pad_to_max_length:  # necessary to pad predictions and labels for being gathered
+                    start_logits = accelerator.pad_across_processes(start_logits, dim=1, pad_index=-100)
+                    end_logits = accelerator.pad_across_processes(end_logits, dim=1, pad_index=-100)
+
+                all_start_logits.append(accelerator.gather_for_metrics(start_logits).cpu().numpy())
+                all_end_logits.append(accelerator.gather_for_metrics(end_logits).cpu().numpy())
+
+        max_len = max([x.shape[1] for x in all_start_logits])  # Get the max_length of the tensor
+
+        # concatenate the numpy array
+        start_logits_concat = create_and_fill_np_array(all_start_logits, eval_dataset, max_len) # (100, 384)
+        end_logits_concat = create_and_fill_np_array(all_end_logits, eval_dataset, max_len)
+
+        # delete the list of numpy arrays
+        del all_start_logits # (13 batches, batch size = 8 , 384)
+        del all_end_logits
+
+        outputs_numpy = (start_logits_concat, end_logits_concat)
+        prediction = post_processing_function(eval_examples, eval_dataset, outputs_numpy)
+
+        # Calculate the exact match metric
+        em = 0
+        for id, pred_ans in prediction.items():
+            # convert sample_id to sample_index
+            sample_index = eval_examples["id"].index(id)
+            if(pred_ans == eval_examples[sample_index]['answer']['text']):
+                em += 1
+        eval_em = em / len(prediction)
+        eval_em_list.append(eval_em)
+        print("--------------------------------")
+        print(f"Training Loss: {train_loss_list[-1]}")
+        print(f"Validation EM rate: {eval_em_list[-1]}")
+        print("--------------------------------")
+
         if args.checkpointing_steps == "epoch":
             output_dir = f"epoch_{epoch}"
             if args.output_dir is not None:

@@ -1,3 +1,4 @@
+import os
 import argparse
 import json
 from itertools import chain
@@ -17,10 +18,10 @@ from transformers import (
 def parse_args():
     ### Arguments ###
     # CUDA_VISIBLE_DEVICES=2
-    model_name_or_path = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc"
+    model_name_or_path = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/mc/03-chinese-macbert-base" # change this
     test_file = "/project/dsp/loijilai/adl/dataset1/test.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
-    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/dataset/"
+    output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/result" # do not change
     max_seq_length = 512 # for tokenizer to do static padding
     test_batch_size = 8
     debug = False
@@ -72,8 +73,23 @@ def parse_args():
     return args
 
 def main():
-    # Loading pretrained model and tokenizer
     args = parse_args()
+    # Handling output directory
+    # find the lastest directory in the output_dir
+    latest = 0
+    for dir_name in os.listdir(args.output_dir):
+        num = int(dir_name.split("_")[0])
+        if num > latest:
+            latest = num
+    args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}")
+    print("output_dir is set to " + args.output_dir)
+    os.mkdir(args.output_dir)
+    with open(os.path.join(args.output_dir, "model.txt"), "w") as f:
+        f.write("MC: " + args.model_name_or_path)
+    print("writing model.txt is done!")
+
+
+    # Loading pretrained model and tokenizer
     config = AutoConfig.from_pretrained(args.model_name_or_path)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     model = AutoModelForMultipleChoice.from_pretrained(args.model_name_or_path, config=config)
