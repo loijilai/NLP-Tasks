@@ -1005,6 +1005,17 @@ def main():
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
 
+            with open(os.path.join(args.output_dir, "result.txt"), "a") as f:
+                f.write(f"------------------epoch_{epoch}-----------------------\n")
+                json.dump({"train_loss": train_loss_list}, f)
+                f.write("\n")
+            with open(os.path.join(args.output_dir, "result.txt"), "a") as f:
+                json.dump({"eval_loss": eval_loss_list}, f)
+                f.write("\n")
+            with open(os.path.join(args.output_dir, "result.txt"), "a") as f:
+                json.dump({"eval_EM": eval_em_list}, f)
+                f.write("\n")
+
     # End training
     print("--------------------------------")
     print("Training finished!")
@@ -1013,12 +1024,7 @@ def main():
     print(f"Eval loss: {eval_loss_list}")
     print(f"Eval EM: {eval_em_list}")
     print("--------------------------------")
-    with open(os.path.join(args.output_dir, "result.json"), "w") as f:
-        json.dump({"train_loss": train_loss_list}, f)
-    with open(os.path.join(args.output_dir, "result.json"), "a") as f:
-        json.dump({"\neval_loss": train_loss_list}, f)
-    with open(os.path.join(args.output_dir, "result.json"), "a") as f:
-        json.dump({"\neval_EM": eval_em_list}, f)
+
 
     # Store the model and tokenizer to use for inference
     if args.output_dir is not None:
