@@ -93,8 +93,8 @@ def parse_args():
     validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
     output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa" # do not change
-    max_train_samples = 50 #
-    max_eval_samples = 50
+    max_train_samples = 100
+    max_eval_samples = 100
     max_predict_samples = None
     checkpointing_steps = "epoch"
     doc_stride = 128
@@ -472,6 +472,10 @@ def main():
 
     # Preprocessing the datasets.
     # Preprocessing is slighlty different for training and evaluation.
+    # (raw_datasets --['validation']--> eval_examples) | --VALID.map()--> TRAIN_dataset_for_EM (--[Remove "example_id", "offset_mapping" DataLoader]--> eval_dataloader)
+    #                                                  |
+    # raw_datasets  ---['train']----->  train_examples | --TRAIN.map()--> train_dataset --[DataLoader]--> train_dataloader
+    # prediction = post_processing_function(eval_examples, eval_dataset, outputs_numpy)
 
     column_names = raw_datasets["train"].column_names
 
@@ -573,15 +577,15 @@ def main():
     
     # I use validation dataset as train dataset
     assert raw_datasets["train"].features.type == raw_datasets["validation"].features.type
-    train_dataset = concatenate_datasets([raw_datasets["train"], raw_datasets["validation"]])
+    train_examples = concatenate_datasets([raw_datasets["train"], raw_datasets["validation"]])
 
     if args.max_train_samples is not None:
         # We will select sample from whole data if agument is specified
-        train_dataset = train_dataset.select(range(args.max_train_samples))
+        train_examples = train_examples.select(range(args.max_train_samples))
 
     # Create train feature from dataset
     with accelerator.main_process_first():
-        train_dataset = train_dataset.map(
+        train_dataset = train_examples.map(
             prepare_train_features,
             batched=True,
             num_proc=args.preprocessing_num_workers,
@@ -645,15 +649,9 @@ def main():
 
         return tokenized_examples
 
-    if "validation" not in raw_datasets:
-        raise ValueError("--do_eval requires a validation dataset")
-    eval_examples = raw_datasets["validation"]
-    if args.max_eval_samples is not None:
-        # We will select sample from whole data
-        eval_examples = eval_examples.select(range(args.max_eval_samples))
-    # Validation Feature Creation
+    # Use train dataset as validation dataset
     with accelerator.main_process_first():
-        eval_dataset = eval_examples.map(
+        train_dataset_for_EM = train_examples.map(
             prepare_validation_features,
             batched=True,
             num_proc=args.preprocessing_num_workers,
@@ -664,7 +662,7 @@ def main():
 
     if args.max_eval_samples is not None:
         # During Feature creation dataset samples might increase, we will select required samples again
-        eval_dataset = eval_dataset.select(range(args.max_eval_samples))
+        train_dataset_for_EM = train_dataset_for_EM.select(range(args.max_eval_samples))
     
     # Dataset({
     # features: ['input_ids', 'token_type_ids', 'attention_mask', 'offset_mapping', 'example_id'],
@@ -687,12 +685,7 @@ def main():
         train_dataset, shuffle=True, collate_fn=data_collator, batch_size=args.per_device_train_batch_size
     )
 
-    eval_dataset_for_model = eval_dataset.remove_columns(["example_id", "offset_mapping"])
-    eval_dataloader = DataLoader(
-        eval_dataset_for_model, collate_fn=data_collator, batch_size=args.per_device_eval_batch_size
-    )
-
-    # Post-processing:         # eval_examples, eval_dataset, outputs_numpy
+    # Post-processing:         # train_examples, train_dataset_for_EM, outputs_numpy
     def post_processing_function(examples, features, predictions, stage="eval"):
         # Post-processing: we match the start logits and end logits to answers in the original context.
         predictions = postprocess_qa_predictions(
@@ -771,8 +764,8 @@ def main():
     )
 
     # Prepare everything with our `accelerator`.
-    model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
+    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, lr_scheduler
     )
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -847,8 +840,6 @@ def main():
     # Record loss and EM for report
     train_loss_list = []
     train_em_list = []
-    eval_loss_list = []
-    eval_em_list = []
     for epoch in range(starting_epoch, args.num_train_epochs):
         if args.resume_from_checkpoint and epoch == starting_epoch and resume_step is not None:
             # We skip the first `n` batches in the dataloader when resuming from a checkpoint
@@ -856,11 +847,17 @@ def main():
         else:
             active_dataloader = train_dataloader
 
+        # For recording training loss
         total_loss = 0
+        # For calculating EM
+        all_start_logits = []
+        all_end_logits = []
         for step, batch in enumerate(active_dataloader):
             model.train()
             with accelerator.accumulate(model):
                 outputs = model(**batch)
+                start_logits = outputs.start_logits
+                end_logits = outputs.end_logits
                 train_loss = outputs.loss
                 # We keep track of the loss at each epoch
                 total_loss += train_loss.detach().cpu().item()
@@ -869,6 +866,13 @@ def main():
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
+
+                if not args.pad_to_max_length:  # necessary to pad predictions and labels for being gathered
+                    start_logits = accelerator.pad_across_processes(start_logits.detach(), dim=1, pad_index=-100)
+                    end_logits = accelerator.pad_across_processes(end_logits.detach(), dim=1, pad_index=-100)
+
+                all_start_logits.append(accelerator.gather_for_metrics(start_logits).cpu().numpy())
+                all_end_logits.append(accelerator.gather_for_metrics(end_logits).cpu().numpy())
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -885,7 +889,7 @@ def main():
             if completed_steps >= args.max_train_steps:
                 break
 
-        # Per epoch operation
+        # Per epoch operation: Calculate loss and EM
         logger.info("***** Metric recording *****")
         logger.info(f"  Current epoch = {epoch + 1}")
         logger.info(f"  Batch size = {args.per_device_eval_batch_size}")
@@ -895,52 +899,35 @@ def main():
         train_loss_list.append(avg_batch_loss) 
 
         # Record EM...
-        all_start_logits = []
-        all_end_logits = []
-
-        model.eval()
-
-        for step, batch in enumerate(eval_dataloader):
-            with torch.no_grad():
-                outputs = model(**batch)
-                start_logits = outputs.start_logits
-                end_logits = outputs.end_logits
-                # eval_loss = outputs.loss
-
-                if not args.pad_to_max_length:  # necessary to pad predictions and labels for being gathered
-                    start_logits = accelerator.pad_across_processes(start_logits, dim=1, pad_index=-100)
-                    end_logits = accelerator.pad_across_processes(end_logits, dim=1, pad_index=-100)
-
-                all_start_logits.append(accelerator.gather_for_metrics(start_logits).cpu().numpy())
-                all_end_logits.append(accelerator.gather_for_metrics(end_logits).cpu().numpy())
-
         max_len = max([x.shape[1] for x in all_start_logits])  # Get the max_length of the tensor
 
         # concatenate the numpy array
-        start_logits_concat = create_and_fill_np_array(all_start_logits, eval_dataset, max_len) # (100, 384)
-        end_logits_concat = create_and_fill_np_array(all_end_logits, eval_dataset, max_len)
+        start_logits_concat = create_and_fill_np_array(all_start_logits, train_dataset_for_EM, max_len) # (100, 384)
+        end_logits_concat = create_and_fill_np_array(all_end_logits, train_dataset_for_EM, max_len)
 
         # delete the list of numpy arrays
-        del all_start_logits # (13 batches, batch size = 8 , 384)
+        del all_start_logits # (num_of_batches, batch size = 8 , max_seq_len = 384)
         del all_end_logits
 
         outputs_numpy = (start_logits_concat, end_logits_concat)
-        prediction = post_processing_function(eval_examples, eval_dataset, outputs_numpy)
+        prediction = post_processing_function(train_examples, train_dataset_for_EM, outputs_numpy)
 
         # Calculate the exact match metric
         em = 0
         for id, pred_ans in prediction.items():
             # convert sample_id to sample_index
-            sample_index = eval_examples["id"].index(id)
-            if(pred_ans == eval_examples[sample_index]['answer']['text']):
+            sample_index = train_examples["id"].index(id)
+            if(pred_ans == train_examples[sample_index]['answer']['text']):
                 em += 1
-        eval_em = em / len(prediction)
-        eval_em_list.append(eval_em)
+        train_em = em / len(prediction)
+        train_em_list.append(train_em)
+
         print("--------------------------------")
         print(f"Training Loss: {train_loss_list[-1]}")
-        print(f"Validation EM rate: {eval_em_list[-1]}")
+        print(f"Training EM rate: {train_em_list[-1]}")
         print("--------------------------------")
 
+        # Store the model checkpoint for continuing training
         if args.checkpointing_steps == "epoch":
             output_dir = f"epoch_{epoch}"
             if args.output_dir is not None:
@@ -951,12 +938,10 @@ def main():
     print("Training finished!")
     print(f"Train loss: {train_loss_list}")
     print(f"Train EM: {train_em_list}")
-    print(f"Eval loss: {eval_loss_list}")
-    print(f"Eval EM: {eval_em_list}")
     with open(os.path.join(args.output_dir, "train_loss_list.json"), "w") as f:
         json.dump({"train_loss": train_loss_list}, f)
-    with open(os.path.join(args.output_dir, "eval_em_list.json"), "w") as f:
-        json.dump({"EM": eval_em_list}, f)
+    with open(os.path.join(args.output_dir, "train_em_list.json"), "w") as f:
+        json.dump({"train_EM": train_em_list}, f)
 
     # Store the model and tokenizer to use for inference
     if args.output_dir is not None:

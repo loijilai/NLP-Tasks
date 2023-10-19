@@ -93,7 +93,7 @@ def save_prefixed_metrics(results, output_dir, file_name: str = "all_results.jso
 def parse_args():
     ### Arguments ###
     # CUDA_VISIBLE_DEVICES=1
-    model_name_or_path = "hfl/chinese-roberta-wwm-ext" # change this
+    model_name_or_path = "hfl/chinese-macbert-base" # change this
     train_file = "/project/dsp/loijilai/adl/dataset1/train.json"
     validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
