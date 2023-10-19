@@ -19,7 +19,7 @@ from transformers import (
 def parse_args():
     ### Arguments ###
     # CUDA_VISIBLE_DEVICES=1
-    model_name_or_path = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa/05-chinese-macbert-base/epoch_5" # change this
+    model_name_or_path = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa/05-chinese-macbert-base/epoch_6" # change this
     test_file = "/tmp2/loijilai/adl/paragraph-selection-QA/dataset" # do not change
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
     output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/result" # do not change
@@ -30,6 +30,7 @@ def parse_args():
     max_test_samples = None # for debugging
     #################
     parser = argparse.ArgumentParser(description="Inference using a transformers model on a Question Answering task")
+    parser.add_argument("--experiment", action="store_true", help="Whether or not to create a folder for experiment result")
     parser.add_argument(
         "--test_file", type=str, default=test_file, help="A csv or a json file containing the Prediction data."
     )
@@ -90,20 +91,22 @@ def parse_args():
 
 def main():
     args = parse_args()
-    # Handling output directory
-    # find the lastest directory in the output_dir
-    latest = 0
-    for dir_name in os.listdir(args.output_dir):
-        num = int(dir_name.split("_")[0])
-        if num > latest:
-            latest = num
-    args.output_dir = os.path.join(args.output_dir, f"{latest:02d}")
-    print("output_dir is set to: " + args.output_dir)
-    args.test_file = os.path.join(args.output_dir, "mc_result.json")
-    print("test_file is set to: " + args.test_file)
-    with open(os.path.join(args.output_dir, "model.txt"), "a") as f:
-        f.write("\nQA: " + args.model_name_or_path)
-    print("writing model.txt is done!")
+
+    if args.experiment:
+        # Handling output directory
+        # find the lastest directory in the output_dir
+        latest = 0
+        for dir_name in os.listdir(args.output_dir):
+            num = int(dir_name.split("_")[0])
+            if num > latest:
+                latest = num
+        args.output_dir = os.path.join(args.output_dir, f"{latest:02d}")
+        print("output_dir is set to: " + args.output_dir)
+        args.test_file = os.path.join(args.output_dir, "mc_result.json")
+        print("test_file is set to: " + args.test_file)
+        with open(os.path.join(args.output_dir, "model.txt"), "a") as f:
+            f.write("\nQA: " + args.model_name_or_path)
+        print("writing model.txt is done!")
         
     # Loading pretrained model and tokenizer
     config = AutoConfig.from_pretrained(args.model_name_or_path)

@@ -106,6 +106,7 @@ def parse_args():
     gradient_accumulation_steps = 2
     #################
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a Question Answering task")
+    parser.add_argument("--experiment", action="store_true", help="Whether or not to create a folder for experiment result")
     parser.add_argument(
         "--dataset_name",
         type=str,
@@ -357,17 +358,19 @@ def parse_args():
 
 def main():
     args = parse_args()
-    # Handling output directory
-    model_name = args.model_name_or_path.split("/")[-1]
-    # find the lastest directory in the output_dir
-    latest = 0
-    for dir_name in os.listdir(args.output_dir):
-        num = int(dir_name.split("-")[0])
-        if num > latest:
-            latest = num
-    args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}-{model_name}")
-    print("output_dir is set to " + args.output_dir)
-    os.mkdir(args.output_dir)
+
+    if args.experiment:
+        # Handling output directory
+        model_name = args.model_name_or_path.split("/")[-1]
+        # find the lastest directory in the output_dir
+        latest = 0
+        for dir_name in os.listdir(args.output_dir):
+            num = int(dir_name.split("-")[0])
+            if num > latest:
+                latest = num
+        args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}-{model_name}")
+        print("output_dir is set to " + args.output_dir)
+        os.mkdir(args.output_dir)
 
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
@@ -900,6 +903,7 @@ def main():
     eval_loss_list = []
     eval_em_list = []
     for epoch in range(starting_epoch, args.num_train_epochs):
+        model.train()
         if args.resume_from_checkpoint and epoch == starting_epoch and resume_step is not None:
             # We skip the first `n` batches in the dataloader when resuming from a checkpoint
             active_dataloader = accelerator.skip_first_batches(train_dataloader, resume_step)
@@ -908,7 +912,6 @@ def main():
 
         total_loss = 0
         for step, batch in enumerate(active_dataloader):
-            model.train()
             with accelerator.accumulate(model):
                 outputs = model(**batch)
                 train_loss = outputs.loss

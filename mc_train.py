@@ -78,6 +78,7 @@ def parse_args():
     #################
 
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a multiple choice task")
+    parser.add_argument("--experiment", action="store_true", help="Whether or not to create a folder for experiment result")
     # Dataset
     parser.add_argument(
         "--dataset_name",
@@ -313,17 +314,19 @@ class DataCollatorForMultipleChoice:
 
 def main():
     args = parse_args()
-    # Handling output directory
-    model_name = args.model_name_or_path.split("/")[-1]
-    # find the lastest directory in the output_dir
-    latest = 0
-    for dir_name in os.listdir(args.output_dir):
-        num = int(dir_name.split("-")[0])
-        if num > latest:
-            latest = num
-    args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}-{model_name}")
-    print("output_dir is set to " + args.output_dir)
-    os.mkdir(args.output_dir)
+
+    if args.experiment:
+        # Handling output directory
+        model_name = args.model_name_or_path.split("/")[-1]
+        # find the lastest directory in the output_dir
+        latest = 0
+        for dir_name in os.listdir(args.output_dir):
+            num = int(dir_name.split("-")[0])
+            if num > latest:
+                latest = num
+        args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}-{model_name}")
+        print("output_dir is set to " + args.output_dir)
+        os.mkdir(args.output_dir)
 
 
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.

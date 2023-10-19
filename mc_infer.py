@@ -28,6 +28,7 @@ def parse_args():
     #################
 
     parser = argparse.ArgumentParser(description="Inference using a transformers model on a multiple choice task")
+    parser.add_argument("--experiment", action="store_true", help="Whether or not to create a folder for experiment result")
     # Dataset
     parser.add_argument(
         "--test_file", type=str, default=test_file, help="A csv or a json file containing the testing data."
@@ -74,19 +75,21 @@ def parse_args():
 
 def main():
     args = parse_args()
+
     # Handling output directory
     # find the lastest directory in the output_dir
-    latest = 0
-    for dir_name in os.listdir(args.output_dir):
-        num = int(dir_name.split("_")[0])
-        if num > latest:
-            latest = num
-    args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}")
-    print("output_dir is set to " + args.output_dir)
-    os.mkdir(args.output_dir)
-    with open(os.path.join(args.output_dir, "model.txt"), "w") as f:
-        f.write("MC: " + args.model_name_or_path)
-    print("writing model.txt is done!")
+    if args.experiment:
+        latest = 0
+        for dir_name in os.listdir(args.output_dir):
+            num = int(dir_name.split("_")[0])
+            if num > latest:
+                latest = num
+        args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}")
+        print("output_dir is set to " + args.output_dir)
+        os.mkdir(args.output_dir)
+        with open(os.path.join(args.output_dir, "model.txt"), "w") as f:
+            f.write("MC: " + args.model_name_or_path)
+        print("writing model.txt is done!")
 
 
     # Loading pretrained model and tokenizer
