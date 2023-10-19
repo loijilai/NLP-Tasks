@@ -1,5 +1,6 @@
 /dataset
 /outputs
 /__pycache__
+/model
 ntuadl2023hw1.zip
 test.py
