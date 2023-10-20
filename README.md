@@ -11,7 +11,21 @@ python set_train_env.py
 ```
 The directory will look like this after executing `set_train_env.py`
 ```
-
+├── dataset
+│   ├── context.json
+│   ├── test.json
+│   ├── train.json
+│   └── valid.json
+├── model
+│   ├── mc
+│   └── qa
+├── mc_train.py
+├── mc_infer.py
+├── qa_train.py
+├── qa_infer.py
+├── ...
+├── .gitignore
+└── README.md
 ```
 
 ### Multiple Choice
@@ -22,14 +36,12 @@ python mc_train.py \
 --train_file "./dataset/train.json" \
 --validation_file "./dataset/valid.json" \
 --context_file "./dataset/context.json" \
---output_dir "./outputs/mc" \
+--output_dir "./model/mc" \
 --max_seq_length 512 \
 --per_device_train_batch_size 1 \
 --gradient_accumulation_steps 2 \
 --learning_rate 3e-5 \
---num_train_epochs 5 \
---with_tracking True \
---debug False
+--num_train_epochs 5
 ```
 
 ### Extractive QA
@@ -39,11 +51,8 @@ python qa_train.py \
 --model_name_or_path "hfl/chinese-macbert-base" \
 --train_file "./dataset/train.json" \
 --validation_file "./dataset/valid.json" \
---context_file ".dataset/context.json" \
---output_dir "./outputs/qa" \
---max_train_samples None \
---max_eval_samples None \
---max_predict_samples None \
+--context_file "./dataset/context.json" \
+--output_dir "./model/qa" \
 --checkpointing_steps "epoch" \
 --doc_stride 128 \
 --num_train_epochs 10 \
@@ -54,11 +63,50 @@ python qa_train.py \
 --gradient_accumulation_steps 2
 ```
 
-## How to reproduce the inference result:
+## How to reproduce my inference result:
+### Get My Training Result
+If you do not want to train the model by yourself, you can get my training result directly through the following command  
 ```
 bash ./download.sh
 ```
+or
+```
+python get_my_model_and_data.py
+```
+The directory will look like this after executing `get_my_model_and_data.py`
 
 ```
-bash ./run.sh ./dataset/context.json ./dataset/test.json ./outputs/result
+├── dataset
+│   ├── context.json
+│   ├── test.json
+│   ├── train.json
+│   └── valid.json
+├── model_outputs
+│   ├── mc
+|   │   ├── config.json
+|   │   ├── special_tokens_map.json
+|   │   ├── tokenizer_config.json
+|   │   ├── tokenizer.json
+|   │   ├── vocab.txt
+|   │   └── pytorch_model.bin
+│   └── qa
+|       ├── config.json
+|       ├── special_tokens_map.json
+|       ├── tokenizer_config.json
+|       ├── tokenizer.json
+|       ├── vocab.txt
+|       └── pytorch_model.bin
+├── mc_train.py
+├── mc_infer.py
+├── qa_train.py
+├── qa_infer.py
+├── ...
+├── .gitignore
+└── README.md
+```
+
+### Run Inference Script
+Load the trained model in the following format: `bash ./run.sh <PATH_TO_CONTEXT> <PATH_TO_TEST> <PATH_TO_OUTPUT>`
+```
+bash ./run.sh ./dataset/context.json ./dataset/test.json .
 ```

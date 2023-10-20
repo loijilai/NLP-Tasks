@@ -5,7 +5,6 @@ python mc_infer.py \
 --output_dir "." \
 --max_seq_length 512 \
 --test_batch_size 8 \
---debug = False
 
 python qa_infer.py \
 --model_name_or_path "./model/qa" \
@@ -16,4 +15,3 @@ python qa_infer.py \
 --test_batch_size 8 \
 --doc_stride 128 \
 --max_answer_length 30 \
---max_test_samples None
