@@ -93,8 +93,8 @@ def parse_args():
     validation_file = "/project/dsp/loijilai/adl/dataset1/valid.json"
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
     output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa" # do not change
-    max_train_samples = None
-    max_eval_samples = None
+    max_train_samples = 10
+    max_eval_samples = 10
     max_predict_samples = None
     checkpointing_steps = "epoch"
     doc_stride = 128
