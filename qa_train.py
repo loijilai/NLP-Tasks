@@ -30,7 +30,7 @@ import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
-from datasets import load_dataset, concatenate_datasets
+from datasets import load_dataset
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from utils_qa import postprocess_qa_predictions
@@ -576,15 +576,15 @@ def main():
     
     # I use validation dataset as train dataset
     assert raw_datasets["train"].features.type == raw_datasets["validation"].features.type
-    train_dataset = concatenate_datasets([raw_datasets["train"], raw_datasets["validation"]])
+    train_examples = raw_datasets["train"]
 
     if args.max_train_samples is not None:
         # We will select sample from whole data if agument is specified
-        train_dataset = train_dataset.select(range(args.max_train_samples))
+        train_examples = train_examples.select(range(args.max_train_samples))
 
     # Create train feature from dataset
     with accelerator.main_process_first():
-        train_dataset = train_dataset.map(
+        train_dataset = train_examples.map(
             prepare_train_features,
             batched=True,
             num_proc=args.preprocessing_num_workers,
