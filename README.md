@@ -81,7 +81,7 @@ The directory will look like this after executing `get_my_model_and_data.py`
 │   ├── test.json
 │   ├── train.json
 │   └── valid.json
-├── model_outputs
+├── model
 │   ├── mc
 |   │   ├── config.json
 |   │   ├── special_tokens_map.json

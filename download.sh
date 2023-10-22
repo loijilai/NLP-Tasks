@@ -1,1 +1,1 @@
-python get_my_model.py
+python get_my_model_and_data.py
