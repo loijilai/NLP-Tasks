@@ -107,6 +107,7 @@ def parse_args():
     #################
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a Question Answering task")
     parser.add_argument("--experiment", action="store_true", help="Whether or not to create a folder for experiment result")
+    parser.add_argument("--from_scratch", action="store_true", help="Training model from scratch for report")
     parser.add_argument(
         "--dataset_name",
         type=str,
@@ -368,7 +369,10 @@ def main():
             num = int(dir_name.split("-")[0])
             if num > latest:
                 latest = num
-        args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}-{model_name}")
+        if args.from_scratch:
+            args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}-{model_name}-from_scratch")
+        else:
+            args.output_dir = os.path.join(args.output_dir, f"{latest+1:02d}-{model_name}")
         print("output_dir is set to " + args.output_dir)
         os.mkdir(args.output_dir)
 
@@ -462,16 +466,15 @@ def main():
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
 
-    if args.model_name_or_path:
+    if args.from_scratch:
+        model = AutoModelForQuestionAnswering.from_config(config)
+    else:
         model = AutoModelForQuestionAnswering.from_pretrained(
             args.model_name_or_path,
             from_tf=bool(".ckpt" in args.model_name_or_path),
             config=config,
             trust_remote_code=args.trust_remote_code,
         )
-    else:
-        logger.info("Training new model from scratch")
-        model = AutoModelForQuestionAnswering.from_config(config, trust_remote_code=args.trust_remote_code)
 
     # Preprocessing the datasets.
     # Preprocessing is slighlty different for training and evaluation.

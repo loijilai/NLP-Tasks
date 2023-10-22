@@ -19,7 +19,7 @@ from transformers import (
 def parse_args():
     ### Arguments ###
     # CUDA_VISIBLE_DEVICES=1
-    model_name_or_path = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa/05-chinese-macbert-base/epoch_6" # change this
+    model_name_or_path = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/qa/01-bert-base-chinese" # change this
     test_file = "/tmp2/loijilai/adl/paragraph-selection-QA/dataset" # do not change
     context_file = "/project/dsp/loijilai/adl/dataset1/context.json"
     output_dir = "/tmp2/loijilai/adl/paragraph-selection-QA/outputs/result" # do not change
