@@ -1,6 +1,7 @@
+/__pycache__
 **/dataset
 **/outputs
-/__pycache__
 **/model
+**/tw_rouge.egg-info
 ntuadl2023hw1.zip
 test.py

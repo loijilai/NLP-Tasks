@@ -91,24 +91,47 @@ summarization_name_mapping = {
 
 
 def parse_args():
+    model_name_or_path = "t5-small"
+    dataset_name = "cnn_dailymail"
+    dataset_config = "3.0.0"
+    source_prefix = "summarize: "
+    output_dir = "./outputs"
+    train_file = None
+    validation_file = None
+    text_column = None
+    summary_column = None
+    per_device_train_batch_size = 8
+    per_device_eval_batch_size = 8
+    learning_rate = 5e-5
+    num_train_epochs = 1
+    gradient_accumulation_steps = 1
+    num_beams = 3
+    checkpointing_steps = "epoch"
+    debug = True
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a summarization task")
+    parser.add_argument(
+        "--debug", 
+        action="store_true", 
+        default=debug,
+        help="Trim a dataset to the first 100 examples for debugging."
+    )
     parser.add_argument(
         "--dataset_name",
         type=str,
-        default=None,
+        default=dataset_name,
         help="The name of the dataset to use (via the datasets library).",
     )
     parser.add_argument(
         "--dataset_config_name",
         type=str,
-        default=None,
+        default=dataset_config,
         help="The configuration name of the dataset to use (via the datasets library).",
     )
     parser.add_argument(
-        "--train_file", type=str, default=None, help="A csv or a json file containing the training data."
+        "--train_file", type=str, default=train_file, help="A csv or a json file containing the training data."
     )
     parser.add_argument(
-        "--validation_file", type=str, default=None, help="A csv or a json file containing the validation data."
+        "--validation_file", type=str, default=validation_file, help="A csv or a json file containing the validation data."
     )
     parser.add_argument(
         "--ignore_pad_token_for_loss",
@@ -128,7 +151,7 @@ def parse_args():
     parser.add_argument(
         "--source_prefix",
         type=str,
-        default=None,
+        default=source_prefix,
         help="A prefix to add before every source text (useful for T5 models).",
     )
     parser.add_argument(
@@ -164,7 +187,7 @@ def parse_args():
     parser.add_argument(
         "--num_beams",
         type=int,
-        default=None,
+        default=num_beams,
         help=(
             "Number of beams to use for evaluation. This argument will be "
             "passed to ``model.generate``, which is used during ``evaluate`` and ``predict``."
@@ -178,6 +201,7 @@ def parse_args():
     parser.add_argument(
         "--model_name_or_path",
         type=str,
+        default=model_name_or_path,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
         required=False,
     )
@@ -196,13 +220,13 @@ def parse_args():
     parser.add_argument(
         "--text_column",
         type=str,
-        default=None,
+        default=text_column,
         help="The name of the column in the datasets containing the full texts (for summarization).",
     )
     parser.add_argument(
         "--summary_column",
         type=str,
-        default=None,
+        default=summary_column,
         help="The name of the column in the datasets containing the summaries (for summarization).",
     )
     parser.add_argument(
@@ -213,23 +237,23 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=8,
+        default=per_device_train_batch_size,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
         "--per_device_eval_batch_size",
         type=int,
-        default=8,
+        default=per_device_eval_batch_size,
         help="Batch size (per device) for the evaluation dataloader.",
     )
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=5e-5,
+        default=learning_rate,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
-    parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
+    parser.add_argument("--num_train_epochs", type=int, default=num_train_epochs, help="Total number of training epochs to perform.")
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -239,7 +263,7 @@ def parse_args():
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=1,
+        default=gradient_accumulation_steps,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument(
@@ -252,7 +276,7 @@ def parse_args():
     parser.add_argument(
         "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
     )
-    parser.add_argument("--output_dir", type=str, default=None, help="Where to store the final model.")
+    parser.add_argument("--output_dir", type=str, default=output_dir, help="Where to store the final model.")
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument(
         "--model_type",
@@ -279,7 +303,7 @@ def parse_args():
     parser.add_argument(
         "--checkpointing_steps",
         type=str,
-        default=None,
+        default=checkpointing_steps,
         help="Whether the various states should be saved at the end of every n steps, or 'epoch' for each epoch.",
     )
     parser.add_argument(
@@ -460,10 +484,10 @@ def main():
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
-    column_names = raw_datasets["train"].column_names
+    column_names = raw_datasets["train"].column_names # ['article', 'highlights', 'id']
 
     # Get the column names for input/target.
-    dataset_columns = summarization_name_mapping.get(args.dataset_name, None)
+    dataset_columns = summarization_name_mapping.get(args.dataset_name, None) # ['article', 'highlights']
     if args.text_column is None:
         text_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
     else:
@@ -507,6 +531,11 @@ def main():
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
 
+    ## DEBUG ##
+    if args.debug:
+        for split in raw_datasets.keys():
+            raw_datasets[split] = raw_datasets[split].select(range(100))
+
     with accelerator.main_process_first():
         train_dataset = raw_datasets["train"].map(
             preprocess_function,
@@ -529,8 +558,8 @@ def main():
         )
 
     # Log a few random samples from the training set:
-    for index in random.sample(range(len(train_dataset)), 1):
-        logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
+    # for index in random.sample(range(len(train_dataset)), 1):
+    #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     label_pad_token_id = -100 if args.ignore_pad_token_for_loss else tokenizer.pad_token_id
     data_collator = DataCollatorForSeq2Seq(
@@ -694,6 +723,7 @@ def main():
             if completed_steps >= args.max_train_steps:
                 break
 
+        # Per epoch operations
         model.eval()
 
         gen_kwargs = {
@@ -702,12 +732,14 @@ def main():
         }
         for step, batch in enumerate(eval_dataloader):
             with torch.no_grad():
-                generated_tokens = accelerator.unwrap_model(model).generate(
+                uwmodel = accelerator.unwrap_model(model)
+                generated_tokens = uwmodel.generate(
                     batch["input_ids"],
                     attention_mask=batch["attention_mask"],
                     **gen_kwargs,
                 )
 
+                # pad the generated tokens and labels
                 generated_tokens = accelerator.pad_across_processes(
                     generated_tokens, dim=1, pad_index=tokenizer.pad_token_id
                 )
