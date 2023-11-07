@@ -1,6 +1,7 @@
 # News Summarization
 
 ## Model description:  
+A multi-language T5 model is fine-tuned to do summarization on news content.
 
 ## How to train my model:
 ```
@@ -22,7 +23,7 @@ python sum_train.py \
 ```
 
 ## How to reproduce my inference result:
-### Get My Training Result
+### Get My Trained Checkpoint
 If you do not want to train the model by yourself, you can get my training result directly through the following command  
 ```
 bash ./download.sh
@@ -31,5 +32,12 @@ bash ./download.sh
 ### Run Inference Script
 Load the trained model in the following format: 
 ```
-bash ./run.sh <PATH_TO_PUBLIC_TEST> <PATH_TO_OUTPUT>
+bash ./run.sh <PATH_TO_PUBLIC_TEST> <PATH_TO_OUTPUT_FILE>
+```
+An `output.jsonl` file will be generated with predicted news titles.
+
+### Get Rouge Score
+Run the following script to get the rouge score on the model prediction `output.jsonl`.
+```
+python eval.py --reference <PATH_TO_GROUND_TRUTH> --submission <PATH_TO_output.jsonl>
 ```
