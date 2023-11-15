@@ -1,14 +1,37 @@
 from curses import raw
+import token
 import torch
 import numpy as np
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 import json
 from peft import LoraConfig, get_peft_model
 from utils import get_prompt, get_bnb_config, print_trainable_parameters
 from ppl import perplexity
 import argparse
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    DataCollatorWithPadding,
+)
+
+def preprocess_function(examples):
+    prompts = [get_prompt(x) for x in examples["instruction"]]  
+    outputs = examples["output"]
+    # debug
+    # tk_p = tokenizer(prompts, add_special_tokens=False)
+    # tk_o = tokenizer(outputs, add_special_tokens=False)
+    tokenized_inputs = tokenizer(prompts, outputs, 
+                                 add_special_tokens=False, 
+                                 return_token_type_ids=True,
+                                 truncation="only_second",
+                                 max_length=2048,
+                                 )
+
+    tokenized_inputs["input_ids"] = [[tokenizer.bos_token_id] + x + [tokenizer.eos_token_id] for x in tokenized_inputs["input_ids"]]
+    tokenized_inputs["attention_mask"] = [[1] * len(x) for x in tokenized_inputs["input_ids"]]
+    tokenized_inputs["token_type_ids"] = [[0] + x + [1] for x in tokenized_inputs["token_type_ids"]]
+    return tokenized_inputs
 
 def parse_args():
     base_model_path = "/tmp2/loijilai/adl/NLP-Tasks/classical-chinese-translate/model/Taiwan-LLM-7B-v2.0-chat"
@@ -18,7 +41,7 @@ def parse_args():
     learning_rate = 5e-5
     num_train_epochs = 1
     gradient_accumulation_steps = 2
-    debug = False
+    debug = True
     parser = argparse.ArgumentParser()
     parser.add_argument("--base_model_path", type=str, default=base_model_path)
     parser.add_argument("--train_data_path", type=str, default=train_data_path)
@@ -70,7 +93,6 @@ if __name__ == "__main__":
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     # Load LoRA
-    # model = PeftModel.from_pretrained(model, args.peft_path)
     config = LoraConfig(
         r=64, 
         lora_alpha=32, 
@@ -80,12 +102,13 @@ if __name__ == "__main__":
     )
 
     print_trainable_parameters(model)
-    # trainable params: 6738415616 || all params: 6738415616 || trainable%: 100.00
     model = get_peft_model(model, config)
     print_trainable_parameters(model)
+    # load_in_4bit=False
+    # trainable params: 6738415616 || all params: 6738415616 || trainable%: 100.00
     # trainable params: 33554432 || all params: 6771970048 || trainable%: 0.50
 
-    # with load_in_4bit=True
+    # load_in_4bit=True
     # trainable params: 262410240 || all params: 3500412928 || trainable%: 7.50
     # trainable params: 33554432 || all params: 3533967360 || trainable%: 0.95
 
@@ -102,3 +125,18 @@ if __name__ == "__main__":
             raw_datasets[split] = raw_datasets[split].select(range(100))
 
     # Preprocess dataset
+    train_dataset = raw_datasets["train"].map(
+        preprocess_function,
+        batched=True,
+        # num_proc=args.preprocessing_num_workers,
+        remove_columns=raw_datasets["train"].column_names,
+        # load_from_cache_file=not args.overwrite_cache,
+        desc="Running tokenizer on dataset",
+    )
+
+
+    data_collator = DataCollatorWithPadding(tokenizer, 
+                                            padding = 'longest',
+                                            # pad_to_multiple_of=(8 if accelerator.use_fp16 else None)
+                                            )
+    
