@@ -45,20 +45,26 @@ def perplexity(
     ppls = []
     loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
     for i in tqdm(range(data_size)):
-        input_ids = tokenized_instructions["input_ids"][i].unsqueeze(0)
-        attn_mask = tokenized_instructions["attention_mask"][i].unsqueeze(0)
-        output_mask = output_masks[i].unsqueeze(0)
+        input_ids = tokenized_instructions["input_ids"][i].unsqueeze(0) # [1, 211]
+        attn_mask = tokenized_instructions["attention_mask"][i].unsqueeze(0) # [1, 211]
+        output_mask = output_masks[i].unsqueeze(0) # [1, 211]
         label = input_ids
 
         with torch.no_grad():
-            out_logits = model(input_ids, attention_mask=attn_mask).logits
+            out_logits = model(input_ids, attention_mask=attn_mask).logits # [1, 211, 32000]
 
+        # Remove the last token from the logits. This is because you're predicting the next token 
+        # given the previous ones, so the last token doesn't need to be predicted.
         shift_logits = out_logits[..., :-1, :].contiguous() # [1, 210, 32000]
+        # when you perform language modeling, you typically predict the next token based on the 
+        # preceding tokens, so you don't need the label for the first token in the sequence. 
+        # Removing the first label ensures that the ground truth labels correspond correctly 
+        # to the predictions made by the model for the subsequent tokens in the sequence.
         shift_label = label[..., 1:].contiguous() # [1, 210]
         shift_output_mask = output_mask[..., 1:].contiguous() # [1, 210]
+        ce_loss = loss_fct(shift_logits.transpose(1, 2), shift_label) # [1, 210]
         perplexity_batch = torch.exp(
-            (loss_fct(shift_logits.transpose(1, 2),shift_label) * shift_output_mask).sum(1)
-            / shift_output_mask.sum(1)
+            (ce_loss * shift_output_mask).sum(1) / shift_output_mask.sum(1)
         )
         ppls += perplexity_batch.tolist()
     return {"perplexities": ppls, "mean_perplexity": np.mean(ppls)}

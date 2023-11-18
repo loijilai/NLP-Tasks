@@ -118,7 +118,7 @@ if __name__ == "__main__":
             )
             # debug
             # um_decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-            decoded_prompt = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+            # decoded_prompt = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
             #
             generated_tokens = [generated_token[len(input_id):] for generated_token, input_id in zip(generated_tokens, input_ids)]
             decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
