@@ -9,6 +9,7 @@ from utils import get_prompt, get_bnb_config, print_trainable_parameters
 import os
 import argparse
 from accelerate import Accelerator
+import transformers
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -16,6 +17,32 @@ from transformers import (
     default_data_collator,
     get_linear_schedule_with_warmup
 )
+
+from torch import nn
+from transformers import Trainer
+
+
+class CustomTrainer(Trainer):
+    def compute_loss(self, model, batch, return_outputs=False):
+            output_mask = batch.pop("token_type_ids") # [batch_size, seq_len]
+            label = batch["input_ids"] # [batch_size, seq_len]
+            outputs = model(**batch)
+            # calculate loss
+            out_logits = outputs.logits # [batch_size, seq_len, vocab_size]
+            shift_logits = out_logits[..., :-1, :].contiguous() # [batch_size, seq_len-1, vocab_size]
+            shift_label = label[..., 1:].contiguous() # [batch_size, seq_len-1]
+            shift_output_mask = output_mask[..., 1:].contiguous() # [batch_size, seq_len-1]
+            ce_loss = loss_fnc(shift_logits.transpose(1, 2), shift_label) # [batch_size, seq_len-1]
+            ce_loss_per_batch = ((ce_loss * shift_output_mask).sum(1) / shift_output_mask.sum(1)).sum() # [batch_size].sum()
+
+        label = inputs["input_ids"]
+        # forward pass
+        outputs = model(**inputs)
+        logits = outputs.get("logits")
+        # compute custom loss (suppose one has 3 labels with different weights)
+        loss_fct = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 2.0, 3.0], device=model.device))
+        loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+        return (loss, outputs) if return_outputs else loss
 
 def preprocess_function(examples):
     prompts = [get_prompt(x) for x in examples["instruction"]]  
@@ -34,14 +61,6 @@ def preprocess_function(examples):
     tokenized_inputs["attention_mask"] = [[1] * len(x) for x in tokenized_inputs["input_ids"]]
     tokenized_inputs["token_type_ids"] = [[0] + x + [1] for x in tokenized_inputs["token_type_ids"]]
     return tokenized_inputs
-
-def calculate_loss(logits, label, output_mask):
-    shift_logits = logits[..., :-1, :].contiguous() # [batch_size, seq_len-1, vocab_size]
-    shift_label = label[..., 1:].contiguous() # [batch_size, seq_len-1]
-    shift_output_mask = output_mask[..., 1:].contiguous() # [batch_size, seq_len-1]
-    ce_loss = loss_fnc(shift_logits.transpose(1, 2), shift_label) # [batch_size, seq_len-1]
-    ce_loss_per_batch = ((ce_loss * shift_output_mask).sum(1) / shift_output_mask.sum(1)).sum() # [batch_size].sum()
-    return ce_loss_per_batch
 
 def parse_args():
     base_model_path = "/tmp2/loijilai/adl/NLP-Tasks/classical-chinese-translate/model/Taiwan-LLM-7B-v2.0-chat"
@@ -161,74 +180,31 @@ if __name__ == "__main__":
                                             padding = 'longest',
                                             # pad_to_multiple_of=(8 if accelerator.use_fp16 else None)
                                             )
-    train_dataloader = DataLoader(
-        train_dataset, 
-        shuffle=True,
-        collate_fn=data_collator, 
-        batch_size=args.per_device_train_batch_size
-    ) 
+    # train_dataloader = DataLoader(
+    #     train_dataset, 
+    #     shuffle=True,
+    #     collate_fn=data_collator, 
+    #     batch_size=args.per_device_train_batch_size
+    # ) 
 
-    eval_dataloader = DataLoader(
-        eval_dataset, 
-        collate_fn=data_collator, 
-        batch_size=args.per_device_eval_batch_size
-    ) 
+    # eval_dataloader = DataLoader(
+    #     eval_dataset, 
+    #     collate_fn=data_collator, 
+    #     batch_size=args.per_device_eval_batch_size
+    # ) 
 
     # prepare optimizer and schedule (linear warmup and decay)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
-    lr_scheduler = get_linear_schedule_with_warmup(
-        optimizer=optimizer,
-        num_warmup_steps=0,
-        num_training_steps=(len(train_dataloader) * args.num_train_epochs),
-    )
+    # optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    # lr_scheduler = get_linear_schedule_with_warmup(
+    #     optimizer=optimizer,
+    #     num_warmup_steps=0,
+    #     num_training_steps=(len(train_dataloader) * args.num_train_epochs),
+    # )
 
     loss_fnc = torch.nn.CrossEntropyLoss(reduction="none")
 
     # training
-    loss_epoch_list = []
-    ppl_epoch_list = []
-    for epoch in range(args.num_train_epochs):
-        model.train()
-        total_loss = 0
-        for step, batch in enumerate(tqdm(train_dataloader)):
-            batch = {k: v.to("cuda") for k, v in batch.items()}
-            output_mask = batch.pop("token_type_ids") # [batch_size, seq_len]
-            label = batch["input_ids"] # [batch_size, seq_len]
-            outputs = model(**batch)
-            # calculate loss
-            out_logits = outputs.logits # [batch_size, seq_len, vocab_size]
-            shift_logits = out_logits[..., :-1, :].contiguous() # [batch_size, seq_len-1, vocab_size]
-            shift_label = label[..., 1:].contiguous() # [batch_size, seq_len-1]
-            shift_output_mask = output_mask[..., 1:].contiguous() # [batch_size, seq_len-1]
-            ce_loss = loss_fnc(shift_logits.transpose(1, 2), shift_label) # [batch_size, seq_len-1]
-            ce_loss_per_batch = ((ce_loss * shift_output_mask).sum(1) / shift_output_mask.sum(1)).sum() # [batch_size].sum()
-            # ce_loss_per_batch = calculate_loss(out_logits, label, output_mask)
-            
-            total_loss += ce_loss_per_batch.item()
-            ce_loss_per_batch.backward()
-            optimizer.step()
-            lr_scheduler.step()
-            optimizer.zero_grad()
-            print(ce_loss_per_batch)
-        
-        # model.eval()
-        # eval_loss = 0
-        # eval_preds = []
-        # for step, batch in enumerate(tqdm(eval_dataloader)):
-        #     batch = {k: v.to("cuda") for k, v in batch.items()}
-        #     output_mask = batch.pop("token_type_ids") # [batch_size, seq_len]
-        #     label = batch["input_ids"] # [batch_size, seq_len]
-        #     with torch.no_grad():
-        #         outputs = model(**batch)
-        #     out_logits = outputs.logits # [batch_size, seq_len, vocab_size]
-        #     ce_loss_per_batch = calculate_loss(out_logits, label, output_mask)
-            
-        train_epoch_loss = total_loss / len(train_dataloader)
-        train_ppl = np.exp(train_epoch_loss)
-        loss_epoch_list.append(ce_loss_per_batch.item())
-        ppl_epoch_list.append(train_ppl)
-        print(f"Epoch {epoch} train loss: {train_epoch_loss}, train ppl: {train_ppl}")
-    
-    # save model
-    model.save_pretrained(os.path.join(args.output_dir, "checkpoint/"))
-    tokenizer.save_pretrained(os.path.join(args.output_dir, "checkpoint/"))
+    trainer = transformers.Trainer(
+        model=model,
+        data_collator=data_collator,
+        train_dataset=
