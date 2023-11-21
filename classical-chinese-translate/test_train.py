@@ -25,17 +25,13 @@ from transformers import Trainer
 
 class CustomTrainer(Trainer):
     def compute_loss(self, model, batch, return_outputs=False):
-        print("batch", batch.keys())
-        print("batch", batch["input_ids"].shape)
-        print("batch", batch["token_type_ids"].shape)
-        print("batch", batch["attention_mask"].shape)
-        output_mask = batch["token_type_ids"] # [batch_size, seq_len]
+        output_mask = batch.pop("token_type_ids") # [batch_size, seq_len]
         label = batch["input_ids"] # [batch_size, seq_len]
         outputs = model(**batch)
         out_logits = outputs.logits # [batch_size, seq_len, vocab_size]
 
         # calculate loss
-        loss_fnc = nn.CrossEntropyLoss(reduction="none", device=model.device)
+        loss_fnc = nn.CrossEntropyLoss(reduction="none")
         shift_logits = out_logits[..., :-1, :].contiguous() # [batch_size, seq_len-1, vocab_size]
         shift_label = label[..., 1:].contiguous() # [batch_size, seq_len-1]
         shift_output_mask = output_mask[..., 1:].contiguous() # [batch_size, seq_len-1]
@@ -153,7 +149,7 @@ if __name__ == "__main__":
 
     if args.debug:
         for split in raw_datasets.keys():
-            raw_datasets[split] = raw_datasets[split].select(range(10))
+            raw_datasets[split] = raw_datasets[split].select(range(100))
 
     # Preprocess dataset
     train_dataset = raw_datasets["train"].map(
@@ -198,6 +194,9 @@ if __name__ == "__main__":
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             learning_rate=args.learning_rate,
             num_train_epochs=args.num_train_epochs,
+            remove_unused_columns=False,
+            logging_strategy="steps",
+            logging_steps=0.2,
         ),
         train_dataset=train_dataset,
         tokenizer=tokenizer,
@@ -205,3 +204,4 @@ if __name__ == "__main__":
         # optimizers=(optimizer, ),
     )
     trainer.train()
+    trainer.save_model()

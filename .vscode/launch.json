@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "env": {"CUDA_VISIBLE_DEVICES":"3"},
+            "env": {"CUDA_VISIBLE_DEVICES":"4"},
             "justMyCode": false
         }
     ]
