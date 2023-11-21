@@ -94,7 +94,6 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    # Load model
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         # bnb_4bit_use_double_quant=True,
@@ -117,30 +116,17 @@ if __name__ == "__main__":
         task_type="CAUSAL_LM"
     )
     model = prepare_model_for_kbit_training(model)
-    print_trainable_parameters(model)
     lora_model = get_peft_model(model, lora_config)
-    print_trainable_parameters(lora_model)
+
     # save model
-    # model.save_pretrained(os.path.join(args.output_dir, "checkpoint/"))
-    # tokenizer.save_pretrained(os.path.join(args.output_dir, "checkpoint/"))
+    # lora_model.save_pretrained(os.path.join(args.output_dir, "checkpoint/"))
+    # tokenizer.save_pretrained(os.path.join(args.output_dir, "tokenizer/"))
 
     trainer = transformers.Trainer(
         model=lora_model,
-        # train_dataset=data["train"],
-        # args=transformers.TrainingArguments(
-        #     per_device_train_batch_size=2,
-        #     num_train_epochs=5,
-        #     gradient_accumulation_steps=4,
-        #     warmup_steps=2,
-        #     max_steps=10,
-        #     learning_rate=2e-4,
-        #     fp16=True,
-        #     logging_steps=1,
-        #     output_dir=os.path.join(args.output_dir, "checkpoint/"),
-        #     optim="paged_adamw_8bit"
-        # ),
-        # data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False),
+        args=transformers.TrainingArguments(
+            output_dir=os.path.join(args.output_dir, "checkpoint/"),
+        ),
     )
-    trainer.save_model(os.path.join(args.output_dir, "checkpoint/"))
-    print(os.path.exists(os.path.join(args.output_dir, "checkpoint/")))
-    # lora_model.save_pretrained(os.path.join(args.output_dir, "checkpoint/"))
+    # print(os.path.exists(os.path.join(args.output_dir, "checkpoint/")))
+    trainer.save_model()

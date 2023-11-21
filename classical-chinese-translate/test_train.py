@@ -1,3 +1,4 @@
+from curses import raw
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
@@ -18,31 +19,30 @@ from transformers import (
     get_linear_schedule_with_warmup
 )
 
-from torch import nn
+from torch import device, le, nn
 from transformers import Trainer
 
 
 class CustomTrainer(Trainer):
     def compute_loss(self, model, batch, return_outputs=False):
-            output_mask = batch.pop("token_type_ids") # [batch_size, seq_len]
-            label = batch["input_ids"] # [batch_size, seq_len]
-            outputs = model(**batch)
-            # calculate loss
-            out_logits = outputs.logits # [batch_size, seq_len, vocab_size]
-            shift_logits = out_logits[..., :-1, :].contiguous() # [batch_size, seq_len-1, vocab_size]
-            shift_label = label[..., 1:].contiguous() # [batch_size, seq_len-1]
-            shift_output_mask = output_mask[..., 1:].contiguous() # [batch_size, seq_len-1]
-            ce_loss = loss_fnc(shift_logits.transpose(1, 2), shift_label) # [batch_size, seq_len-1]
-            ce_loss_per_batch = ((ce_loss * shift_output_mask).sum(1) / shift_output_mask.sum(1)).sum() # [batch_size].sum()
+        print("batch", batch.keys())
+        print("batch", batch["input_ids"].shape)
+        print("batch", batch["token_type_ids"].shape)
+        print("batch", batch["attention_mask"].shape)
+        output_mask = batch["token_type_ids"] # [batch_size, seq_len]
+        label = batch["input_ids"] # [batch_size, seq_len]
+        outputs = model(**batch)
+        out_logits = outputs.logits # [batch_size, seq_len, vocab_size]
 
-        label = inputs["input_ids"]
-        # forward pass
-        outputs = model(**inputs)
-        logits = outputs.get("logits")
-        # compute custom loss (suppose one has 3 labels with different weights)
-        loss_fct = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 2.0, 3.0], device=model.device))
-        loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
-        return (loss, outputs) if return_outputs else loss
+        # calculate loss
+        loss_fnc = nn.CrossEntropyLoss(reduction="none", device=model.device)
+        shift_logits = out_logits[..., :-1, :].contiguous() # [batch_size, seq_len-1, vocab_size]
+        shift_label = label[..., 1:].contiguous() # [batch_size, seq_len-1]
+        shift_output_mask = output_mask[..., 1:].contiguous() # [batch_size, seq_len-1]
+        ce_loss = loss_fnc(shift_logits.transpose(1, 2), shift_label) # [batch_size, seq_len-1]
+        ce_loss_per_batch = ((ce_loss * shift_output_mask).sum(1) / shift_output_mask.sum(1)).sum() # [batch_size].sum()
+        return (ce_loss_per_batch, outputs) if return_outputs else ce_loss_per_batch
+
 
 def preprocess_function(examples):
     prompts = [get_prompt(x) for x in examples["instruction"]]  
@@ -70,7 +70,7 @@ def parse_args():
     per_device_train_batch_size = 2
     per_device_eval_batch_size = 2
     learning_rate = 5e-5
-    num_train_epochs = 1
+    num_train_epochs = 3
     gradient_accumulation_steps = 2
     debug = True
     parser = argparse.ArgumentParser()
@@ -103,6 +103,11 @@ def parse_args():
         type=int, default=num_train_epochs, 
         help="Total number of training epochs to perform."
     )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int, default=gradient_accumulation_steps, 
+        help="gradient accumulation steps."
+    )
     args = parser.parse_args()
     return args
 
@@ -116,6 +121,7 @@ if __name__ == "__main__":
             args.base_model_path,
             torch_dtype=torch.bfloat16,
             # quantization_config=bnb_config
+            # TODO: Does not use bnb_config
             load_in_4bit=True
         )  
         model = prepare_model_for_kbit_training(model)
@@ -134,15 +140,8 @@ if __name__ == "__main__":
     )
 
     print_trainable_parameters(model)
-    model = get_peft_model(model, lora_config)
-    print_trainable_parameters(model)
-    # load_in_4bit=False
-    # trainable params: 6738415616 || all params: 6738415616 || trainable%: 100.00
-    # trainable params: 33554432 || all params: 6771970048 || trainable%: 0.50
-
-    # load_in_4bit=True
-    # trainable params: 262410240 || all params: 3500412928 || trainable%: 7.50
-    # trainable params: 33554432 || all params: 3533967360 || trainable%: 0.95
+    lora_model = get_peft_model(model, lora_config)
+    print_trainable_parameters(lora_model)
 
     # Load dataset
     data_files = {}
@@ -180,31 +179,29 @@ if __name__ == "__main__":
                                             padding = 'longest',
                                             # pad_to_multiple_of=(8 if accelerator.use_fp16 else None)
                                             )
-    # train_dataloader = DataLoader(
-    #     train_dataset, 
-    #     shuffle=True,
-    #     collate_fn=data_collator, 
-    #     batch_size=args.per_device_train_batch_size
-    # ) 
-
-    # eval_dataloader = DataLoader(
-    #     eval_dataset, 
-    #     collate_fn=data_collator, 
-    #     batch_size=args.per_device_eval_batch_size
-    # ) 
 
     # prepare optimizer and schedule (linear warmup and decay)
-    # optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    # optimizer = torch.optim.AdamW(lora_model.parameters(), lr=args.learning_rate)
     # lr_scheduler = get_linear_schedule_with_warmup(
     #     optimizer=optimizer,
     #     num_warmup_steps=0,
     #     num_training_steps=(len(train_dataloader) * args.num_train_epochs),
     # )
 
-    loss_fnc = torch.nn.CrossEntropyLoss(reduction="none")
-
     # training
-    trainer = transformers.Trainer(
-        model=model,
+    trainer = CustomTrainer(
+        model=lora_model,
+        args=transformers.TrainingArguments(
+            output_dir=os.path.join(args.output_dir, "checkpoint/"),
+            do_train=True,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            learning_rate=args.learning_rate,
+            num_train_epochs=args.num_train_epochs,
+        ),
+        train_dataset=train_dataset,
+        tokenizer=tokenizer,
         data_collator=data_collator,
-        train_dataset=
+        # optimizers=(optimizer, ),
+    )
+    trainer.train()
