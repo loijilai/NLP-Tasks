@@ -15,12 +15,24 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     DataCollatorWithPadding,
+    TrainerCallback,
     default_data_collator,
     get_linear_schedule_with_warmup
 )
 
 from torch import device, le, nn
 from transformers import Trainer
+
+from transformers import TrainerCallback
+
+class LoggingCallback(TrainerCallback):
+    def __init__(self, file_path):
+        self.file_path = file_path
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        # logs contain the training loss and other metrics
+        with open(self.file_path, 'a') as file:
+            file.write(f"{logs}\n")
 
 
 class CustomTrainer(Trainer):
@@ -38,6 +50,13 @@ class CustomTrainer(Trainer):
         ce_loss = loss_fnc(shift_logits.transpose(1, 2), shift_label) # [batch_size, seq_len-1]
         ce_loss_per_batch = ((ce_loss * shift_output_mask).sum(1) / shift_output_mask.sum(1)).sum() # [batch_size].sum()
         return (ce_loss_per_batch, outputs) if return_outputs else ce_loss_per_batch
+
+    # def prediction_step(
+    #     self, model: nn.Module, batch, prediction_loss_only: bool, ignore_keys):
+    #     batch = self._prepare_inputs(batch)
+    #     loss = self.compute_loss(model, batch, return_outputs=False)
+    #     if prediction_loss_only:
+    #         return (loss, None, None)
 
 
 def preprocess_function(examples):
@@ -63,12 +82,12 @@ def parse_args():
     train_data_path = "/tmp2/loijilai/adl/NLP-Tasks/classical-chinese-translate/dataset/train.json"
     eval_data_path = "/tmp2/loijilai/adl/NLP-Tasks/classical-chinese-translate/dataset/public_test.json"
     output_dir = "/tmp2/loijilai/adl/NLP-Tasks/classical-chinese-translate/peft_output"
-    per_device_train_batch_size = 2
+    per_device_train_batch_size = 4
     per_device_eval_batch_size = 2
     learning_rate = 5e-5
     num_train_epochs = 3
     gradient_accumulation_steps = 2
-    debug = True
+    debug = False
     parser = argparse.ArgumentParser()
     parser.add_argument("--base_model_path", type=str, default=base_model_path)
     parser.add_argument("--train_data_path", type=str, default=train_data_path)
@@ -116,9 +135,7 @@ if __name__ == "__main__":
         model = AutoModelForCausalLM.from_pretrained(
             args.base_model_path,
             torch_dtype=torch.bfloat16,
-            # quantization_config=bnb_config
-            # TODO: Does not use bnb_config
-            load_in_4bit=True
+            quantization_config=bnb_config
         )  
         model = prepare_model_for_kbit_training(model)
         tokenizer = AutoTokenizer.from_pretrained(args.base_model_path)
@@ -149,7 +166,9 @@ if __name__ == "__main__":
 
     if args.debug:
         for split in raw_datasets.keys():
-            raw_datasets[split] = raw_datasets[split].select(range(100))
+            raw_datasets[split] = raw_datasets[split].select(range(10))
+    
+    raw_datasets["train"] = raw_datasets["train"].select(range(3000))
 
     # Preprocess dataset
     train_dataset = raw_datasets["train"].map(
@@ -184,23 +203,41 @@ if __name__ == "__main__":
     #     num_training_steps=(len(train_dataloader) * args.num_train_epochs),
     # )
 
+    # logging_callback = LoggingCallback(file_path="training_log.txt")
+
     # training
     trainer = CustomTrainer(
         model=lora_model,
         args=transformers.TrainingArguments(
+            # output
             output_dir=os.path.join(args.output_dir, "checkpoint/"),
+            # dataset
+            remove_unused_columns=False,
+            # training
             do_train=True,
             per_device_train_batch_size=args.per_device_train_batch_size,
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             learning_rate=args.learning_rate,
             num_train_epochs=args.num_train_epochs,
-            remove_unused_columns=False,
+            # evaluation
+            # do_eval=True,
+            # per_device_eval_batch_size=args.per_device_eval_batch_size,
+            # eval_accumulation_steps=args.gradient_accumulation_steps,
+            # evaluation_strategy="steps",
+            # eval_steps=0.2,
+            # prediction_loss_only=True,
+            # saving
+            save_strategy="steps",
+            save_steps=0.2,
+            # logging
             logging_strategy="steps",
             logging_steps=0.2,
         ),
         train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         tokenizer=tokenizer,
         data_collator=data_collator,
+        # callbacks=[logging_callback],
         # optimizers=(optimizer, ),
     )
     trainer.train()
