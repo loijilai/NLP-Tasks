@@ -124,3 +124,7 @@ if __name__ == "__main__":
     model.eval()
     ppl = perplexity(model, tokenizer, data)
     print("Mean perplexity:", ppl["mean_perplexity"])
+    # round to 4 bits and write to file
+    with open("ppl.txt", "a") as f:
+        f.write(str(round(ppl["mean_perplexity"], 4)))
+        f.write(", ")

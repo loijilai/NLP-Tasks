@@ -1,3 +1,4 @@
+from curses import raw
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
@@ -9,20 +10,58 @@ from utils import get_prompt, get_bnb_config, print_trainable_parameters
 import os
 import argparse
 from accelerate import Accelerator
+import transformers
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     DataCollatorWithPadding,
+    TrainerCallback,
     default_data_collator,
     get_linear_schedule_with_warmup
 )
 
+from torch import device, le, nn
+from transformers import Trainer
+
+from transformers import TrainerCallback
+
+class LoggingCallback(TrainerCallback):
+    def __init__(self, file_path):
+        self.file_path = file_path
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        # logs contain the training loss and other metrics
+        with open(self.file_path, 'a') as file:
+            file.write(f"{logs}\n")
+
+
+class CustomTrainer(Trainer):
+    def compute_loss(self, model, batch, return_outputs=False):
+        output_mask = batch.pop("token_type_ids") # [batch_size, seq_len]
+        label = batch["input_ids"] # [batch_size, seq_len]
+        outputs = model(**batch)
+        out_logits = outputs.logits # [batch_size, seq_len, vocab_size]
+
+        # calculate loss
+        loss_fnc = nn.CrossEntropyLoss(reduction="none")
+        shift_logits = out_logits[..., :-1, :].contiguous() # [batch_size, seq_len-1, vocab_size]
+        shift_label = label[..., 1:].contiguous() # [batch_size, seq_len-1]
+        shift_output_mask = output_mask[..., 1:].contiguous() # [batch_size, seq_len-1]
+        ce_loss = loss_fnc(shift_logits.transpose(1, 2), shift_label) # [batch_size, seq_len-1]
+        ce_loss_per_batch = ((ce_loss * shift_output_mask).sum(1) / shift_output_mask.sum(1)).sum() # [batch_size].sum()
+        return (ce_loss_per_batch, outputs) if return_outputs else ce_loss_per_batch
+
+    # def prediction_step(
+    #     self, model: nn.Module, batch, prediction_loss_only: bool, ignore_keys):
+    #     batch = self._prepare_inputs(batch)
+    #     loss = self.compute_loss(model, batch, return_outputs=False)
+    #     if prediction_loss_only:
+    #         return (loss, None, None)
+
+
 def preprocess_function(examples):
     prompts = [get_prompt(x) for x in examples["instruction"]]  
     outputs = examples["output"]
-    # debug
-    # tk_p = tokenizer(prompts, add_special_tokens=False)
-    # tk_o = tokenizer(outputs, add_special_tokens=False)
     tokenized_inputs = tokenizer(prompts, outputs, 
                                  add_special_tokens=False, 
                                  return_token_type_ids=True,
@@ -35,25 +74,17 @@ def preprocess_function(examples):
     tokenized_inputs["token_type_ids"] = [[0] + x + [1] for x in tokenized_inputs["token_type_ids"]]
     return tokenized_inputs
 
-def calculate_loss(logits, label, output_mask):
-    shift_logits = logits[..., :-1, :].contiguous() # [batch_size, seq_len-1, vocab_size]
-    shift_label = label[..., 1:].contiguous() # [batch_size, seq_len-1]
-    shift_output_mask = output_mask[..., 1:].contiguous() # [batch_size, seq_len-1]
-    ce_loss = loss_fnc(shift_logits.transpose(1, 2), shift_label) # [batch_size, seq_len-1]
-    ce_loss_per_batch = ((ce_loss * shift_output_mask).sum(1) / shift_output_mask.sum(1)).sum() # [batch_size].sum()
-    return ce_loss_per_batch
-
 def parse_args():
     base_model_path = "/tmp2/loijilai/adl/NLP-Tasks/classical-chinese-translate/model/Taiwan-LLM-7B-v2.0-chat"
     train_data_path = "/tmp2/loijilai/adl/NLP-Tasks/classical-chinese-translate/dataset/train.json"
     eval_data_path = "/tmp2/loijilai/adl/NLP-Tasks/classical-chinese-translate/dataset/public_test.json"
     output_dir = "/tmp2/loijilai/adl/NLP-Tasks/classical-chinese-translate/peft_output"
-    per_device_train_batch_size = 2
+    per_device_train_batch_size = 4
     per_device_eval_batch_size = 2
     learning_rate = 5e-5
-    num_train_epochs = 1
+    num_train_epochs = 6
     gradient_accumulation_steps = 2
-    debug = True
+    debug = False
     parser = argparse.ArgumentParser()
     parser.add_argument("--base_model_path", type=str, default=base_model_path)
     parser.add_argument("--train_data_path", type=str, default=train_data_path)
@@ -84,6 +115,11 @@ def parse_args():
         type=int, default=num_train_epochs, 
         help="Total number of training epochs to perform."
     )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int, default=gradient_accumulation_steps, 
+        help="gradient accumulation steps."
+    )
     args = parser.parse_args()
     return args
 
@@ -96,8 +132,7 @@ if __name__ == "__main__":
         model = AutoModelForCausalLM.from_pretrained(
             args.base_model_path,
             torch_dtype=torch.bfloat16,
-            # quantization_config=bnb_config
-            load_in_4bit=True
+            quantization_config=bnb_config
         )  
         model = prepare_model_for_kbit_training(model)
         tokenizer = AutoTokenizer.from_pretrained(args.base_model_path)
@@ -115,15 +150,8 @@ if __name__ == "__main__":
     )
 
     print_trainable_parameters(model)
-    model = get_peft_model(model, lora_config)
-    print_trainable_parameters(model)
-    # load_in_4bit=False
-    # trainable params: 6738415616 || all params: 6738415616 || trainable%: 100.00
-    # trainable params: 33554432 || all params: 6771970048 || trainable%: 0.50
-
-    # load_in_4bit=True
-    # trainable params: 262410240 || all params: 3500412928 || trainable%: 7.50
-    # trainable params: 33554432 || all params: 3533967360 || trainable%: 0.95
+    lora_model = get_peft_model(model, lora_config)
+    print_trainable_parameters(lora_model)
 
     # Load dataset
     data_files = {}
@@ -136,6 +164,8 @@ if __name__ == "__main__":
     if args.debug:
         for split in raw_datasets.keys():
             raw_datasets[split] = raw_datasets[split].select(range(10))
+    
+    raw_datasets["train"] = raw_datasets["train"].select(range(3000))
 
     # Preprocess dataset
     train_dataset = raw_datasets["train"].map(
@@ -161,74 +191,51 @@ if __name__ == "__main__":
                                             padding = 'longest',
                                             # pad_to_multiple_of=(8 if accelerator.use_fp16 else None)
                                             )
-    train_dataloader = DataLoader(
-        train_dataset, 
-        shuffle=True,
-        collate_fn=data_collator, 
-        batch_size=args.per_device_train_batch_size
-    ) 
-
-    eval_dataloader = DataLoader(
-        eval_dataset, 
-        collate_fn=data_collator, 
-        batch_size=args.per_device_eval_batch_size
-    ) 
 
     # prepare optimizer and schedule (linear warmup and decay)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
-    lr_scheduler = get_linear_schedule_with_warmup(
-        optimizer=optimizer,
-        num_warmup_steps=0,
-        num_training_steps=(len(train_dataloader) * args.num_train_epochs),
-    )
+    # optimizer = torch.optim.AdamW(lora_model.parameters(), lr=args.learning_rate)
+    # lr_scheduler = get_linear_schedule_with_warmup(
+    #     optimizer=optimizer,
+    #     num_warmup_steps=0,
+    #     num_training_steps=(len(train_dataloader) * args.num_train_epochs),
+    # )
 
-    loss_fnc = torch.nn.CrossEntropyLoss(reduction="none")
+    # logging_callback = LoggingCallback(file_path="training_log.txt")
 
     # training
-    loss_epoch_list = []
-    ppl_epoch_list = []
-    for epoch in range(args.num_train_epochs):
-        model.train()
-        total_loss = 0
-        for step, batch in enumerate(tqdm(train_dataloader)):
-            batch = {k: v.to("cuda") for k, v in batch.items()}
-            output_mask = batch.pop("token_type_ids") # [batch_size, seq_len]
-            label = batch["input_ids"] # [batch_size, seq_len]
-            outputs = model(**batch)
-            # calculate loss
-            out_logits = outputs.logits # [batch_size, seq_len, vocab_size]
-            shift_logits = out_logits[..., :-1, :].contiguous() # [batch_size, seq_len-1, vocab_size]
-            shift_label = label[..., 1:].contiguous() # [batch_size, seq_len-1]
-            shift_output_mask = output_mask[..., 1:].contiguous() # [batch_size, seq_len-1]
-            ce_loss = loss_fnc(shift_logits.transpose(1, 2), shift_label) # [batch_size, seq_len-1]
-            ce_loss_per_batch = ((ce_loss * shift_output_mask).sum(1) / shift_output_mask.sum(1)).sum() # [batch_size].sum()
-            # ce_loss_per_batch = calculate_loss(out_logits, label, output_mask)
-            
-            total_loss += ce_loss_per_batch.item()
-            ce_loss_per_batch.backward()
-            optimizer.step()
-            lr_scheduler.step()
-            optimizer.zero_grad()
-            print(ce_loss_per_batch)
-        
-        # model.eval()
-        # eval_loss = 0
-        # eval_preds = []
-        # for step, batch in enumerate(tqdm(eval_dataloader)):
-        #     batch = {k: v.to("cuda") for k, v in batch.items()}
-        #     output_mask = batch.pop("token_type_ids") # [batch_size, seq_len]
-        #     label = batch["input_ids"] # [batch_size, seq_len]
-        #     with torch.no_grad():
-        #         outputs = model(**batch)
-        #     out_logits = outputs.logits # [batch_size, seq_len, vocab_size]
-        #     ce_loss_per_batch = calculate_loss(out_logits, label, output_mask)
-            
-        train_epoch_loss = total_loss / len(train_dataloader)
-        train_ppl = np.exp(train_epoch_loss)
-        loss_epoch_list.append(ce_loss_per_batch.item())
-        ppl_epoch_list.append(train_ppl)
-        print(f"Epoch {epoch} train loss: {train_epoch_loss}, train ppl: {train_ppl}")
-    
-    # save model
-    model.save_pretrained(os.path.join(args.output_dir, "checkpoint/"))
-    tokenizer.save_pretrained(os.path.join(args.output_dir, "checkpoint/"))
+    trainer = CustomTrainer(
+        model=lora_model,
+        args=transformers.TrainingArguments(
+            # output
+            output_dir=os.path.join(args.output_dir, "checkpoint/"),
+            # dataset
+            remove_unused_columns=False,
+            # training
+            do_train=True,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            learning_rate=args.learning_rate,
+            num_train_epochs=args.num_train_epochs,
+            # evaluation
+            # do_eval=True,
+            # per_device_eval_batch_size=args.per_device_eval_batch_size,
+            # eval_accumulation_steps=args.gradient_accumulation_steps,
+            # evaluation_strategy="steps",
+            # eval_steps=0.2,
+            # prediction_loss_only=True,
+            # saving
+            save_strategy="steps",
+            save_steps=0.2,
+            # logging
+            logging_strategy="steps",
+            logging_steps=0.2,
+        ),
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+        # callbacks=[logging_callback],
+        # optimizers=(optimizer, ),
+    )
+    trainer.train(resume_from_checkpoint="/tmp2/loijilai/adl/NLP-Tasks/classical-chinese-translate/peft_output/checkpoint/checkpoint-1125")
+    trainer.save_model()
