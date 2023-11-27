@@ -27,7 +27,7 @@ Load the trained model in the following format:
 ```
 bash ./run.sh <PATH_TO_TAIWAN_LLAMA> <PATH_TO_ADAPTER_CHECKPOINT> <PATH_TO_TEST_FILE> <PATH_TO_OUTPUT_FILE>
 ```
-An `json` file will be generated with predicted news titles.  
+An `json` file will be generated with the model's output.  
 You can also perform few-shot or zero-shot learning (without qlora-finetuning) using `--zero_shot` and `--few_shot` tag.  
 
 ### Get Perplexity Score
